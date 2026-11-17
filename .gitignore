@@ -1,0 +1,6 @@
+# 编译产物
+/ugal
+/ugal.exe
+
+# 本地数据目录（若使用 --data-dir .ugal）
+/.ugal/
