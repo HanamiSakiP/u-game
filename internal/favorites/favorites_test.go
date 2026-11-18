@@ -120,3 +120,62 @@ func TestMarshalRoundTrip(t *testing.T) {
 		t.Fatalf("again = %#v", again)
 	}
 }
+
+func TestNormalizeStatus(t *testing.T) {
+	cases := map[string]string{
+		"":            "",
+		"  在玩 ":       StatusPlaying,
+		"playing":     StatusPlaying,
+		"IN-PROGRESS": StatusPlaying,
+		"已通关":         StatusFinished,
+		"completed":   StatusFinished,
+		"想玩":          StatusWant,
+		"wishlist":    StatusWant,
+		"搁置":          StatusOnHold,
+		"on-hold":     StatusOnHold,
+		"none":        "",
+		"未标记":         "",
+		"自定义状态":       "自定义状态",
+	}
+	for in, want := range cases {
+		if got := NormalizeStatus(in); got != want {
+			t.Fatalf("NormalizeStatus(%q) = %q, want %q", in, got, want)
+		}
+	}
+	if StatusLabel("") != "未标记" {
+		t.Fatalf("StatusLabel(empty) = %q", StatusLabel(""))
+	}
+}
+
+func TestAddMergeStatus(t *testing.T) {
+	data := &model.FavoritesData{Games: []model.Favorite{
+		{AppID: 440, Name: "TF2", Status: StatusPlaying},
+	}}
+	Add(data, []model.Favorite{
+		{AppID: 440, Note: "keep", Status: StatusFinished},
+		{AppID: 220, Name: "HL2", Status: "playing"},
+	})
+	if data.Games[1].Status != StatusPlaying {
+		t.Fatalf("existing status should be kept: %#v", data.Games[1])
+	}
+	if data.Games[0].Status != StatusPlaying {
+		t.Fatalf("new status should be normalized: %#v", data.Games[0])
+	}
+	if data.Games[1].Note != "keep" {
+		t.Fatalf("note should merge: %#v", data.Games[1])
+	}
+}
+
+func TestParseStatus(t *testing.T) {
+	data, err := Parse([]byte(`{"games":[{"appid":440,"name":"TF2","status":"playing"},{"appid":220,"status":"已通关"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID := map[int]string{}
+	for _, g := range data.Games {
+		byID[g.AppID] = g.Status
+	}
+	if byID[440] != StatusPlaying || byID[220] != StatusFinished {
+		t.Fatalf("status not parsed: %#v", byID)
+	}
+}

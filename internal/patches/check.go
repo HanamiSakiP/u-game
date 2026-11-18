@@ -219,3 +219,51 @@ func (s CheckStatus) Label() string {
 		return "未找到"
 	}
 }
+
+// FileIndex 是补丁目录的文件名索引，便于一次扫描后查找多个补丁文件。
+type FileIndex struct {
+	files map[string][]string
+}
+
+// IndexDir 递归扫描 dir 并建立补丁文件名索引。
+func IndexDir(dir string) *FileIndex {
+	return &FileIndex{files: indexPatchFiles(dir)}
+}
+
+// Find 按文件名（不区分大小写）查找补丁文件。appid 大于 0 时优先返回该
+// appid 子目录下的文件。找不到时返回空字符串。
+func (idx *FileIndex) Find(name string, appid int) string {
+	if idx == nil {
+		return ""
+	}
+	name = strings.ToLower(strings.TrimSpace(name))
+	if name == "" {
+		return ""
+	}
+	candidates := idx.files[name]
+	if len(candidates) == 0 {
+		return ""
+	}
+	candidates = preferAppDir(candidates, appid)
+	return candidates[0]
+}
+
+// FindFile 在 dir 中按文件名（不区分大小写）查找补丁文件。appid 大于 0 时
+// 优先返回该 appid 子目录下的文件。找不到时返回空字符串。
+// 需要连续查找多个文件时，先用 IndexDir 建立索引更高效。
+func FindFile(dir, name string, appid int) string {
+	return IndexDir(dir).Find(name, appid)
+}
+
+// FindFiles 返回 dir 中所有同名补丁文件。
+func FindFiles(dir, name string, appid int) []string {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if name == "" {
+		return nil
+	}
+	candidates := indexPatchFiles(dir)[name]
+	if len(candidates) == 0 {
+		return nil
+	}
+	return preferAppDir(candidates, appid)
+}

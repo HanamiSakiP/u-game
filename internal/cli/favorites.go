@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -26,6 +27,8 @@ func (a *app) cmdFav(args []string) error {
 		return a.favList(args[1:])
 	case "add", "+":
 		return a.favAdd(args[1:])
+	case "status", "state", "set":
+		return a.favStatus(args[1:])
 	case "remove", "rm", "del", "delete":
 		return a.favRemove(args[1:])
 	case "import", "load":
@@ -64,8 +67,9 @@ func (a *app) favAdd(args []string) error {
 	fs.SetOutput(a.err)
 	nameFlag := fs.String("name", "", "指定游戏名称（仅添加一个 appid 时可用）")
 	noteFlag := fs.String("note", "", "备注")
+	statusFlag := fs.String("status", "", "收藏状态（想玩/在玩/已通关/搁置，或自定义）")
 	fs.Usage = func() {
-		fmt.Fprintln(a.err, "用法: ugal fav add <appid...> [--name 名称] [--note 备注]")
+		fmt.Fprintln(a.err, "用法: ugal fav add <appid...> [--name 名称] [--note 备注] [--status 状态]")
 	}
 	if err := parseArgs(fs, args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -87,13 +91,14 @@ func (a *app) favAdd(args []string) error {
 	if err != nil {
 		return err
 	}
+	status := favorites.NormalizeStatus(*statusFlag)
 	items := make([]model.Favorite, 0, len(ids))
 	for _, id := range ids {
 		name := names[id]
 		if *nameFlag != "" {
 			name = *nameFlag
 		}
-		items = append(items, model.Favorite{AppID: id, Name: name, Note: *noteFlag})
+		items = append(items, model.Favorite{AppID: id, Name: name, Note: *noteFlag, Status: status})
 	}
 	data, err := a.loadFavorites()
 	if err != nil {
@@ -105,6 +110,157 @@ func (a *app) favAdd(args []string) error {
 	}
 	fmt.Fprintf(a.out, "已添加 %d 个，收藏夹共 %d 个\n", added, data.Count)
 	return nil
+}
+
+// favStatus 查看或设置收藏状态。支持：
+//   - ugal fav status                显示全部收藏的状态
+//   - ugal fav status 440 220        显示指定收藏的状态
+//   - ugal fav status 440 在玩        设置状态（可一次设置多个 appid）
+//   - ugal fav status 440 clear      清除状态（clear/未标记/--clear 均可）
+func (a *app) favStatus(args []string) error {
+	fs := flag.NewFlagSet("fav status", flag.ContinueOnError)
+	fs.SetOutput(a.err)
+	clearFlag := fs.Bool("clear", false, "清除收藏状态")
+	statusFlag := fs.String("status", "", "收藏状态（也可直接写在 appid 之后）")
+	offline := fs.Bool("offline", false, "显示时不为缺失的名称联网")
+	fs.Usage = func() {
+		fmt.Fprintln(a.err, "用法: ugal fav status [appid...] [状态|clear] [--clear]")
+		fmt.Fprintf(a.err, "  状态可选: %s，也可以直接写自定义状态\n", strings.Join(favorites.StatusValues(), "/"))
+	}
+	if err := parseArgs(fs, args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return err
+	}
+	rest := fs.Args()
+
+	status := ""
+	hasStatus := *clearFlag
+	if value := strings.TrimSpace(*statusFlag); value != "" {
+		status = value
+		hasStatus = true
+	}
+	if len(rest) > 0 {
+		last := strings.TrimSpace(rest[len(rest)-1])
+		if _, err := strconv.Atoi(last); err != nil {
+			if hasStatus {
+				return errors.New("状态只能指定一次：位置参数或 --status")
+			}
+			status = last
+			hasStatus = true
+			rest = rest[:len(rest)-1]
+		}
+	}
+	if hasStatus {
+		status = favorites.NormalizeStatus(status)
+	}
+
+	ids, err := parseAppIDs(rest)
+	if err != nil {
+		return err
+	}
+	data, err := a.loadFavorites()
+	if err != nil {
+		return err
+	}
+
+	if !hasStatus {
+		return a.printFavoriteStatus(data, ids, *offline)
+	}
+	if len(ids) == 0 {
+		return errors.New("请提供至少一个 appid，例如 `ugal fav status 440 在玩`")
+	}
+	updated := 0
+	for _, id := range ids {
+		idx := favoriteIndex(data, id)
+		if idx < 0 {
+			fmt.Fprintf(a.err, "跳过 %d：不在收藏夹中\n", id)
+			continue
+		}
+		data.Games[idx].Status = status
+		updated++
+	}
+	if updated == 0 {
+		return errors.New("没有更新任何收藏：appid 都不在收藏夹中")
+	}
+	if err := a.store.SaveFavorites(data); err != nil {
+		return err
+	}
+	if status == "" {
+		fmt.Fprintf(a.out, "已清除 %d 个收藏的状态\n", updated)
+	} else {
+		fmt.Fprintf(a.out, "已将 %d 个收藏的状态设为 %s\n", updated, status)
+	}
+	return nil
+}
+
+// printFavoriteStatus 以表格显示收藏状态；ids 为空时显示全部收藏。
+func (a *app) printFavoriteStatus(data *model.FavoritesData, ids []int, offline bool) error {
+	if data == nil || len(data.Games) == 0 {
+		fmt.Fprintln(a.out, "收藏夹为空，使用 `ugal fav add <appid>` 添加游戏。")
+		return nil
+	}
+	wanted := make(map[int]bool, len(ids))
+	for _, id := range ids {
+		wanted[id] = true
+	}
+	selected := make([]model.Favorite, 0, len(data.Games))
+	for _, g := range data.Games {
+		if len(wanted) == 0 || wanted[g.AppID] {
+			selected = append(selected, g)
+		}
+	}
+	if len(selected) == 0 {
+		fmt.Fprintln(a.out, "没有符合条件的收藏。")
+		return nil
+	}
+
+	// 收藏里缺少名称时才回退到本地/网络名称。
+	missing := make([]int, 0, len(selected))
+	for _, g := range selected {
+		if strings.TrimSpace(g.Name) == "" {
+			missing = append(missing, g.AppID)
+		}
+	}
+	names := make(map[int]string)
+	if len(missing) > 0 {
+		if resolved, err := a.resolveGameNames(missing, offline); err == nil {
+			names = resolved
+		}
+	}
+
+	headers := []string{"APPID", "名称", "收藏状态"}
+	right := []bool{true, false, false}
+	rows := make([][]string, 0, len(selected))
+	for _, g := range selected {
+		name := strings.TrimSpace(g.Name)
+		if name == "" {
+			name = names[g.AppID]
+		}
+		if name == "" {
+			name = fmt.Sprintf("App %d", g.AppID)
+		}
+		rows = append(rows, []string{
+			fmt.Sprintf("%d", g.AppID),
+			truncateDisplay(name, 48),
+			favorites.StatusLabel(g.Status),
+		})
+	}
+	renderTable(a.out, headers, right, rows)
+	return nil
+}
+
+func favoriteIndex(data *model.FavoritesData, appid int) int {
+	if data == nil {
+		return -1
+	}
+	for i := range data.Games {
+		if data.Games[i].AppID == appid {
+			return i
+		}
+	}
+	return -1
 }
 
 func (a *app) favRemove(args []string) error {
@@ -146,18 +302,19 @@ func (a *app) favRemove(args []string) error {
 }
 
 type favoriteRow struct {
-	AppID     int           `json:"appid"`
-	Name      string        `json:"name,omitempty"`
-	Note      string        `json:"note,omitempty"`
-	Publisher string        `json:"publisher,omitempty"`
-	AddedAt   time.Time     `json:"added_at,omitempty"`
-	Status    string        `json:"status"`
-	Type      string        `json:"type,omitempty"`
-	Installed bool          `json:"installed"`
-	Cover     string        `json:"cover,omitempty"`
-	CoverSize int64         `json:"cover_size,omitempty"`
-	Patch     *model.Patch  `json:"patch,omitempty"`
-	Patches   []model.Patch `json:"patches,omitempty"`
+	AppID          int           `json:"appid"`
+	Name           string        `json:"name,omitempty"`
+	Note           string        `json:"note,omitempty"`
+	Publisher      string        `json:"publisher,omitempty"`
+	AddedAt        time.Time     `json:"added_at,omitempty"`
+	Status         string        `json:"status"`
+	FavoriteStatus string        `json:"favorite_status,omitempty"`
+	Type           string        `json:"type,omitempty"`
+	Installed      bool          `json:"installed"`
+	Cover          string        `json:"cover,omitempty"`
+	CoverSize      int64         `json:"cover_size,omitempty"`
+	Patch          *model.Patch  `json:"patch,omitempty"`
+	Patches        []model.Patch `json:"patches,omitempty"`
 }
 
 func (a *app) favList(args []string) error {
@@ -166,10 +323,11 @@ func (a *app) favList(args []string) error {
 	asJSON := fs.Bool("json", false, "输出 JSON")
 	installedOnly := fs.Bool("installed", false, "只看本地已安装")
 	missingOnly := fs.Bool("missing", false, "只看未安装")
+	statusFlag := fs.String("status", "", "只看指定收藏状态（逗号分隔；none 表示未标记）")
 	paths := fs.Bool("paths", false, "显示完整封面路径")
 	offline := fs.Bool("offline", false, "不联网获取发行商")
 	fs.Usage = func() {
-		fmt.Fprintln(a.err, "用法: ugal fav [list] [--json] [--installed|--missing] [--paths] [--offline]")
+		fmt.Fprintln(a.err, "用法: ugal fav [list] [--json] [--installed|--missing] [--status 状态] [--paths] [--offline]")
 	}
 	if err := parseArgs(fs, args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -183,6 +341,7 @@ func (a *app) favList(args []string) error {
 	if *installedOnly && *missingOnly {
 		return errors.New("--installed 和 --missing 只能选择一个")
 	}
+	statusFilter := parseFavoriteStatusFilter(*statusFlag)
 	data, err := a.loadFavorites()
 	if err != nil {
 		return err
@@ -224,6 +383,10 @@ func (a *app) favList(args []string) error {
 		if *missingOnly && isInstalled {
 			continue
 		}
+		favStatus := favorites.NormalizeStatus(g.Status)
+		if statusFilter != nil && !statusFilter[favStatus] {
+			continue
+		}
 		name := g.Name
 		if name == "" {
 			name = e.Name
@@ -238,15 +401,16 @@ func (a *app) favList(args []string) error {
 			firstPatch = &p
 		}
 		row := favoriteRow{
-			AppID:     g.AppID,
-			Name:      name,
-			Note:      g.Note,
-			AddedAt:   g.AddedAt,
-			Status:    status,
-			Type:      typ,
-			Installed: isInstalled,
-			Patch:     firstPatch,
-			Patches:   patchList,
+			AppID:          g.AppID,
+			Name:           name,
+			Note:           g.Note,
+			AddedAt:        g.AddedAt,
+			Status:         status,
+			FavoriteStatus: favStatus,
+			Type:           typ,
+			Installed:      isInstalled,
+			Patch:          firstPatch,
+			Patches:        patchList,
 		}
 		if strings.TrimSpace(g.Note) == "" {
 			// 没有备注时用发行商作为默认分组。
@@ -317,8 +481,8 @@ func (a *app) favList(args []string) error {
 		return nil
 	}
 
-	headers := []string{"APPID", "状态", "类型", "补丁", "名称", "封面", "备注/发行商"}
-	right := []bool{true, false, false, false, false, false, false}
+	headers := []string{"APPID", "安装", "收藏状态", "类型", "补丁", "哈希", "名称", "封面", "备注/发行商"}
+	right := []bool{true, false, false, false, false, false, false, false, false}
 	groups := make([]tableGroup, 0)
 	for _, r := range rows {
 		coverCell := "有"
@@ -339,8 +503,10 @@ func (a *app) favList(args []string) error {
 		groups[len(groups)-1].Rows = append(groups[len(groups)-1].Rows, []string{
 			fmt.Sprintf("%d", r.AppID),
 			statusLabel(r.Status),
+			favorites.StatusLabel(r.FavoriteStatus),
 			typeLabel(r.Type),
 			patchStatusAll(r.Patches),
+			patchHashCell(r.Patches),
 			truncateDisplay(r.Name, 48),
 			coverCell,
 			truncateDisplay(displayGroup, 48),
@@ -356,7 +522,87 @@ func (a *app) favList(args []string) error {
 	renderGroupedTable(a.out, headers, right, groups)
 	fmt.Fprintf(a.out, "\n收藏 %d 个 | 已安装 %d 个 | 未安装 %d 个\n",
 		len(rows), installedCount, len(rows)-installedCount)
+	if line := favoriteStatusSummary(rows); line != "" {
+		fmt.Fprintf(a.out, "收藏状态: %s\n", line)
+	}
 	return nil
+}
+
+// parseFavoriteStatusFilter 解析 --status：返回 nil 表示不过滤；
+// 支持逗号分隔的多个状态，none / 未标记 表示空状态。
+func parseFavoriteStatusFilter(raw string) map[string]bool {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || strings.EqualFold(raw, "all") || raw == "全部" {
+		return nil
+	}
+	want := make(map[string]bool)
+	for _, part := range strings.Split(raw, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if strings.EqualFold(part, "all") || part == "全部" {
+			return nil
+		}
+		if strings.EqualFold(part, "none") || strings.EqualFold(part, "untagged") || part == "未标记" || part == "无状态" {
+			want[""] = true
+			continue
+		}
+		want[favorites.NormalizeStatus(part)] = true
+	}
+	if len(want) == 0 {
+		return nil
+	}
+	return want
+}
+
+// favoriteStatusSummary 汇总收藏状态，全部未标记时返回空字符串。
+func favoriteStatusSummary(rows []favoriteRow) string {
+	counts := make(map[string]int, len(rows))
+	for _, r := range rows {
+		counts[favorites.NormalizeStatus(r.FavoriteStatus)]++
+	}
+	var parts []string
+	seen := make(map[string]bool)
+	appendStatus := func(status string) {
+		if n := counts[status]; n > 0 && !seen[status] {
+			seen[status] = true
+			if status == "" {
+				parts = append(parts, fmt.Sprintf("未标记 %d 个", n))
+			} else {
+				parts = append(parts, fmt.Sprintf("%s %d 个", status, n))
+			}
+		}
+	}
+	for _, status := range favorites.StatusValues() {
+		appendStatus(status)
+	}
+	// 自定义状态按名称排序，保证输出稳定。
+	var custom []string
+	for status := range counts {
+		if status == "" {
+			continue
+		}
+		known := false
+		for _, preset := range favorites.StatusValues() {
+			if status == preset {
+				known = true
+				break
+			}
+		}
+		if !known {
+			custom = append(custom, status)
+		}
+	}
+	sort.Strings(custom)
+	for _, status := range custom {
+		appendStatus(status)
+	}
+	appendStatus("")
+	if len(parts) == 1 && counts[""] == len(rows) {
+		return ""
+	}
+	return strings.Join(parts, " | ")
 }
 
 // favoriteGroup 返回收藏的分组名：优先使用备注，没有备注时使用发行商。
@@ -551,9 +797,15 @@ func printFavHelp(w io.Writer) {
   ugal fav list [--json]                列出收藏
   ugal fav list --installed             只看已安装
   ugal fav list --missing               只看未安装
+  ugal fav list --status 在玩           只看指定收藏状态（可逗号分隔，none 为未标记）
   ugal fav list --offline               不联网获取发行商
   ugal fav add <appid...>               添加游戏
   ugal fav add <appid> --name 名称      自定义名称
+  ugal fav add <appid> --status 在玩    添加时设置收藏状态
+  ugal fav status                       查看全部收藏状态
+  ugal fav status <appid...>            查看指定收藏的状态
+  ugal fav status <appid...> 状态        设置收藏状态（想玩/在玩/已通关/搁置，或自定义）
+  ugal fav status <appid...> clear      清除收藏状态
   ugal fav remove <appid...>            删除游戏
   ugal fav remove --all                 清空收藏夹
   ugal fav import <文件> [--replace]    导入 JSON / appid 列表

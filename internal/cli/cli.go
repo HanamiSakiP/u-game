@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -105,6 +106,8 @@ func Run(args []string, stdout, stderr io.Writer) error {
 		return a.cmdFav(rest[1:])
 	case "patch", "patches":
 		return a.cmdPatch(rest[1:])
+	case "save", "saves":
+		return a.cmdSave(rest[1:])
 	case "update", "upgrade", "self-update", "selfupdate":
 		return a.cmdUpdate(rest[1:])
 	case "config":
@@ -746,12 +749,14 @@ func (a *app) cmdConfig(args []string) error {
 	}
 	key := normalizeConfigKey(args[0])
 	if key == "" {
-		return fmt.Errorf("未知配置项 %q，可选 steamid、steam-dir、source、user-agent、update-dir、repo、branch", args[0])
+		return fmt.Errorf("未知配置项 %q，可选 steamid、steam-user、steam-dir、source、user-agent、update-dir、repo、branch", args[0])
 	}
 	if len(args) == 1 {
 		switch key {
 		case "steamid":
 			fmt.Fprintln(a.out, a.cfg.SteamID)
+		case "steam-user":
+			fmt.Fprintln(a.out, a.cfg.SteamUser)
 		case "steam-dir":
 			fmt.Fprintln(a.out, a.cfg.SteamDir)
 		case "source":
@@ -776,6 +781,13 @@ func (a *app) cmdConfig(args []string) error {
 		// 只提取标识本身，不在这里转换为 SteamID64：community 来源需要保留
 		// 自定义 URL / AccountID 原值，SteamDB 等来源会在抓取时再转换。
 		a.cfg.SteamID = remote.NormalizeSteamID(value)
+	case "steam-user":
+		if value != "" {
+			if _, err := strconv.ParseUint(value, 10, 32); err != nil {
+				return fmt.Errorf("Steam 账号 ID 必须是数字: %s", value)
+			}
+		}
+		a.cfg.SteamUser = value
 	case "steam-dir":
 		a.cfg.SteamDir = strings.Trim(value, `"'`)
 	case "source":
@@ -817,6 +829,7 @@ func (a *app) printConfig() {
 	fmt.Fprintf(a.out, "数据目录 : %s\n", a.store.Dir)
 	fmt.Fprintf(a.out, "配置文件 : %s\n", a.store.ConfigPath())
 	fmt.Fprintf(a.out, "SteamID  : %s\n", orPlaceholder(a.cfg.SteamID, "（未设置）"))
+	fmt.Fprintf(a.out, "Steam账号: %s\n", orPlaceholder(a.cfg.SteamUser, "（自动探测）"))
 	fmt.Fprintf(a.out, "Steam目录: %s\n", orPlaceholder(a.cfg.SteamDir, "（自动探测）"))
 	fmt.Fprintf(a.out, "来源     : %s\n", orPlaceholder(a.cfg.Source, "auto"))
 	fmt.Fprintf(a.out, "Cookie   : %s\n", cookieState)
@@ -826,6 +839,8 @@ func (a *app) printConfig() {
 	fmt.Fprintf(a.out, "收藏夹   : %s\n", a.store.FavoritesPath())
 	fmt.Fprintf(a.out, "补丁记录 : %s\n", a.store.PatchesPath())
 	fmt.Fprintf(a.out, "补丁目录 : %s\n", a.store.PatchesDir())
+	fmt.Fprintf(a.out, "存档记录 : %s\n", a.store.SavesPath())
+	fmt.Fprintf(a.out, "存档目录 : %s\n", a.store.SavesDir())
 	fmt.Fprintf(a.out, "名称缓存 : %s\n", a.store.AppNamesPath())
 	fmt.Fprintf(a.out, "封面目录 : %s\n", a.store.CoversDir())
 	fmt.Fprintf(a.out, "源码目录 : %s\n", orPlaceholder(a.cfg.UpdateDir, a.defaultSrcDir()))
@@ -1062,6 +1077,8 @@ func normalizeConfigKey(key string) string {
 	switch strings.ToLower(strings.TrimSpace(key)) {
 	case "steamid", "steam-id", "steam_id":
 		return "steamid"
+	case "steam-user", "steamuser", "steam_user", "account-id", "accountid":
+		return "steam-user"
 	case "steam-dir", "steamdir", "steam_dir", "steam-directory":
 		return "steam-dir"
 	case "source":
@@ -1102,7 +1119,8 @@ func printHelp(w io.Writer) {
   system             检测并记录当前系统环境
   cover [appid...]   获取/下载已安装游戏封面（跳过已有，失败自动重试）
   fav <子命令>       本地游戏收藏夹（添加、导入导出）
-  patch <子命令>     游戏补丁记录（哈希、名称、是否已打补丁）
+  patch <子命令>     游戏补丁记录（哈希、名称、是否已打补丁、自动安装）
+  save <子命令>      云存档 / 本地存档同步（备份到数据目录，可还原）
   update             同步源码到本地目录并重新构建（git / 源码包）
   config             查看或修改配置
   cookie <子命令>    SteamDB Cookie（浏览器获取、查看、定位、清除）
@@ -1129,6 +1147,9 @@ func printHelp(w io.Writer) {
   cover --retry 2            下载失败后的重试次数
   cover --source local|cdn   只用本地缓存或只用网络
   fav add 440                收藏游戏
+  fav add 440 --status 在玩  收藏并标记状态
+  fav status 440 已通关      修改收藏状态（clear 清除）
+  fav list --status 想玩     按收藏状态筛选
   fav export fav.json        导出收藏夹
   fav import fav.json        导入收藏夹
   fav import                 从 patches.json 一键导入收藏
@@ -1137,6 +1158,14 @@ func printHelp(w io.Writer) {
   patch set 440 --file x.patch --applied
   patch set 440 --hash <哈希> --not-applied
   patch check                检查本地补丁文件是否存在且哈希正确
+  patch install 440          把补丁压缩包解压到游戏目录并替换同名文件
+  patch install --all        安装所有已记录的补丁
+  save sync                  收集云存档和本地存档到 ~/.ugal/saves
+  save sync --no-cloud       只同步本地存档（savedata 等目录）
+  save sync --no-local       只同步 Steam 云存档
+  save restore 440           把备份写回云存档 / 游戏目录
+  save restore --all         还原所有已记录的存档
+  save list --paths          查看已同步的存档来源路径
   update --check             只检查是否有新版本
   update --no-build          只同步源码，不构建
   update --build-only        用已有源码重新构建（不联网）
@@ -1171,16 +1200,22 @@ func printHelp(w io.Writer) {
   ugal cookie get
   ugal completion
   ugal config steamid 76561198000000000
+  ugal config steam-user 12345678
   ugal config steam-dir "D:\SteamLibrary"
+  ugal save sync
+  ugal save restore 440
 
 数据目录:
   默认 ~/.ugal；当前目录的 .ugal 是数据目录（空目录或含数据文件）时优先使用。
   包含 config.json、owned.json、installed.json、system.json、favorites.json、
-  patches.json、update.json、covers/、patches/、src/，以及可选的 cookie.txt
+  patches.json、saves.json、update.json、covers/、patches/、saves/、src/，
+  以及可选的 cookie.txt
   （SteamDB Cookie）。patches.json 会在任意命令首次运行时按内置默认记录自动
   创建，可直接编辑；运行 "ugal fav import" 可从 patches.json 一键导入收藏。patches/ 用于
   存放本地补丁文件，patch check 会校验其中文件是否存在、哈希是否与
-  patches.json 记录一致。
+  patches.json 记录一致；patch install 会把压缩包解压到游戏目录并替换同名文件。
+  saves/ 保存从 Steam 云存档和游戏目录 savedata 等目录同步来的存档备份，
+  saves.json 记录每个存档的来源路径和同步时间。
   update 命令默认把源码放在数据目录的 src/（默认 ~/.ugal/src），并在本机构建。
   运行任意命令时，如果数据目录下的 src/ 不存在，会自动写入二进制内嵌的源码
   （已有源码不覆盖）。

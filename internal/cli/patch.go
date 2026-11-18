@@ -36,6 +36,8 @@ func (a *app) cmdPatch(args []string) error {
 		return a.patchHash(append([]string{"--sha256"}, args[1:]...))
 	case "check", "verify", "validate":
 		return a.patchCheck(args[1:])
+	case "install", "apply":
+		return a.patchInstall(args[1:])
 	case "help", "-h", "--help":
 		printPatchHelp(a.out)
 		return nil
@@ -65,6 +67,29 @@ func patchStatus(p *model.Patch) string {
 
 func patchStatusAll(ps []model.Patch) string {
 	return patches.StatusLabelAll(ps)
+}
+
+// patchHashCell 把补丁哈希压缩成表格单元：每个哈希只保留前 8 位，
+// 多个补丁用逗号分隔，整体过长时截断。
+func patchHashCell(ps []model.Patch) string {
+	if len(ps) == 0 {
+		return "-"
+	}
+	hashes := make([]string, 0, len(ps))
+	for _, p := range ps {
+		h := patches.NormalizeHash(p.Hash)
+		if h == "" {
+			continue
+		}
+		if len(h) > 8 {
+			h = h[:8]
+		}
+		hashes = append(hashes, h)
+	}
+	if len(hashes) == 0 {
+		return "-"
+	}
+	return truncateDisplay(strings.Join(hashes, ","), 24)
 }
 
 func attachPatches(entries []entry, data *model.PatchesData) {
@@ -838,6 +863,18 @@ func printPatchHelp(w io.Writer) {
   ugal patch check --dir 补丁目录        检查指定目录
   ugal patch check --json               机器可读输出
   ugal patch check --offline            输出游戏名时不联网
+  ugal patch install <appid...>         把该 appid 已记录的补丁压缩包解压到游戏目录
+  ugal patch install <appid> --name 名称
+                                        只安装指定补丁
+  ugal patch install <appid> --file 压缩包
+                                        直接安装指定压缩包并记录为补丁
+  ugal patch install --all              安装所有已记录且找到文件的补丁
+  ugal patch install <appid> --backup   替换同名文件前先备份
+  ugal patch install <appid> --strip 1  去掉压缩包顶层目录后再解压
+  ugal patch install <appid> --dry-run  只显示将写入的文件
+  ugal patch install <appid> --game-dir 目录
+                                        覆盖游戏目录
+  ugal patch install <appid> --json     机器可读输出
   ugal patch hash <补丁文件>             只计算 MD5（默认）
   ugal patch hash <补丁文件> --sha256    只计算 SHA-256
   ugal patch md5 <补丁文件>              MD5 简写

@@ -10,11 +10,13 @@
 3. 对比两者，列出「已拥有未安装」「本地已安装但未同步」的游戏；
 4. 检测并记录当前系统环境（发行版、内核、桌面、会话等）；
 5. 为本地已安装游戏获取封面，优先复制 Steam 本地缓存，缺失时从 Steam CDN 下载；
-6. 维护本地游戏收藏夹，支持 JSON / appid 列表导入与导出，并可从 `patches.json` 一键导入；
+6. 维护本地游戏收藏夹，记录收藏状态（想玩/在玩/已通关/搁置），支持 JSON / appid 列表导入与导出，并可从 `patches.json` 一键导入；
 7. 记录游戏补丁状态（补丁名称、SHA-256/MD5 哈希、是否已打补丁），同一个 appid 可以记录多个补丁文件，没有记录时显示「无补丁」；`patches.json` 会在任意命令首次运行时按内置默认记录自动创建并可直接编辑；支持从本地 `patches/` 目录校验补丁文件是否存在、哈希是否正确；列表会按 appid 自动解析游戏名称；
-8. 自我更新：源码内嵌在二进制中，任意命令自动写入数据目录下的 `src/`（默认 `~/.ugal/src`）；`ugal update` 同步远程更新并在本机重新构建。
-9. Cookie 管理：`ugal cookie get` 用 Firefox 获取 SteamDB Cookie，支持查看、定位和清除。
-10. 命令补全：`ugal completion` 自动检测当前 shell 并写入标准补全位置，也可显式指定 bash/zsh/fish/powershell。
+8. 存档同步：把 Steam 云存档（`userdata/<账号ID>/<appid>/remote`）和游戏目录中的本地存档（通常为 `savedata`、`save` 等）备份到 `~/.ugal/saves`，并支持写回原位置；
+9. 补丁自动安装：把 `patches/` 中的补丁压缩包解压到对应游戏目录，同名文件自动替换，可选用 `--backup` 先备份原文件；
+10. 自我更新：源码内嵌在二进制中，任意命令自动写入数据目录下的 `src/`（默认 `~/.ugal/src`）；`ugal update` 同步远程更新并在本机重新构建。
+11. Cookie 管理：`ugal cookie get` 用 Firefox 获取 SteamDB Cookie，支持查看、定位和清除。
+12. 命令补全：`ugal completion` 自动检测当前 shell 并写入标准补全位置，也可显式指定 bash/zsh/fish/powershell。
 
 数据默认保存在 `~/.ugal`；如果当前目录下的 `.ugal` 是数据目录（空目录，或含有
 `config.json`、`owned.json` 等数据文件），则优先使用它（方便把数据放在项目里）。
@@ -96,6 +98,10 @@ ugal cover --retry 3      # 下载失败时最多重试 3 次
 ugal fav                  # 查看收藏夹
 ugal fav add 440 220      # 添加游戏（自动补全名称）
 ugal fav add 440 --name "Team Fortress 2" --note "常玩"
+ugal fav add 440 --status 在玩   # 添加时记录收藏状态
+ugal fav status 440 已通关       # 修改收藏状态
+ugal fav status 440 clear       # 清除收藏状态
+ugal fav list --status 想玩      # 按收藏状态筛选
 ugal fav export fav.json  # 导出 JSON
 ugal fav import fav.json  # 导入 JSON（合并）
 ugal fav import fav.json --replace  # 用导入内容替换
@@ -116,21 +122,35 @@ ugal patch md5 patch.xp3          # MD5 简写
 ugal patch sha256 patch.xp3       # SHA-256 简写
 ugal patch check                  # 校验 ~/.ugal/patches 中文件是否存在、哈希是否正确
 ugal patch check --dir ~/补丁     # 校验指定目录
+ugal patch install 440            # 解压该游戏记录的补丁到游戏目录，替换同名文件
+ugal patch install 440 --backup   # 替换前先备份原文件
+ugal patch install 440 --dry-run  # 只预览将写入的文件
+ugal patch install --all          # 安装所有已记录且找到文件的补丁
 
-# 8. 自我更新：同步源码到本地目录并重新构建
+# 8. 存档同步：云存档 + 游戏目录中的本地存档
+ugal save                         # 查看已同步的存档
+ugal save sync                    # 备份云存档和本地存档到 ~/.ugal/saves
+ugal save sync --no-cloud         # 只同步本地存档（savedata 等）
+ugal save sync --no-local         # 只同步 Steam 云存档
+ugal save sync 440 --local-dir "D:\Game\savedata"
+ugal save restore 440             # 把备份写回云存档 / 游戏目录
+ugal save restore --all --force   # 还原全部并覆盖较新的目标文件
+ugal save list --paths            # 查看存档来源路径
+
+# 9. 自我更新：同步源码到本地目录并重新构建
 ugal update                       # 同步 + 本地构建，覆盖当前可执行文件
 ugal update --check               # 只检查是否有新版本
 ugal update --no-build            # 只同步源码
 ugal update --build-only          # 不联网，用已有源码重新构建
 
-# 9. SteamDB Cookie
+# 10. SteamDB Cookie
 ugal cookie                       # 查看 Cookie 状态和文件位置
 ugal cookie get                   # 用 Firefox 完成验证并保存 Cookie
 ugal cookie get --print           # 获取后输出 Cookie 内容
 ugal cookie show                  # 显示已保存的 Cookie
 ugal cookie clear                 # 删除已保存的 Cookie
 
-# 10. 命令补全
+# 11. 命令补全
 ugal completion                   # 自动检测当前 shell 并写入补全脚本
 ugal completion bash              # 显式指定 bash（zsh/fish/powershell 同理）
 ugal completion --print           # 只输出补全脚本，不写入文件
@@ -165,8 +185,12 @@ cover --retry 2             失败后的重试次数（0 表示不重试）
 
 fav list --installed        只看已安装的收藏
 fav list --missing          只看未安装的收藏
+fav list --status 在玩      只看指定收藏状态（逗号分隔，none 为未标记）
 fav list --offline          不联网获取发行商
 fav list --json             机器可读输出
+fav add 440 --status 想玩   添加时设置收藏状态
+fav status 440 已通关       设置收藏状态
+fav status 440 clear        清除收藏状态
 fav remove 440              删除收藏
 fav remove --all            清空收藏夹
 
@@ -181,9 +205,28 @@ patch hash FILE --sha256    只计算文件 SHA-256
 patch check                 检查 <数据目录>/patches 中补丁文件是否存在、哈希是否正确
 patch check --dir DIR       检查指定目录
 patch check --json          机器可读输出
+patch install 440           自动解压该游戏记录的补丁到游戏目录
+patch install 440 --file FILE  直接安装指定压缩包并记录为补丁
+patch install 440 --name NAME  只安装指定名称的补丁
+patch install 440 --backup  替换同名文件前备份到 <数据目录>/patch-backups
+patch install 440 --strip 1 去掉压缩包顶层目录后再解压
+patch install 440 --dry-run 只显示将写入的文件
+patch install --all         安装所有已记录且找到文件的补丁
 patch set --applied         标记该 appid 的全部补丁为已打补丁
 patch set --not-applied     标记该 appid 的全部补丁为未打补丁
 patch remove --name NAME    只删除指定名称的补丁记录
+
+save sync                   备份云存档和本地存档到 <数据目录>/saves
+save sync --no-cloud        只同步本地存档
+save sync --no-local        只同步云存档
+save sync --local-dir DIR   显式指定本地存档目录（需要 appid）
+save sync --mirror          删除备份中源目录已不存在的文件
+save sync --dry-run         只统计不写文件
+save restore 440            把备份写回云存档 / 游戏目录
+save restore --all          还原所有记录
+save restore --force        目标文件更新时也覆盖
+save remove 440             删除记录和备份
+save list --paths           显示完整存档来源路径
 
 update --check              只检查是否有更新
 update --no-build           只同步源码，不构建
@@ -260,6 +303,7 @@ ugal sync 76561198000000000 \
 ```bash
 ugal config                                  # 查看配置与文件位置
 ugal config steamid 76561198000000000        # 记住 SteamID（原样保存，抓取时按来源转换）
+ugal config steam-user 12345678              # 记住 Steam 账号 ID（userdata 下的数字目录）
 ugal config steam-dir "D:\SteamLibrary"      # 记住 Steam 根目录
 ugal config source auto                      # auto/steamdb/community/api
 ugal config update-dir ~/ugal-src            # 自我更新的源码目录
@@ -327,7 +371,29 @@ ugal config branch main                      # 自我更新的分支
 | `NekoNyan Ltd. / Kagura Games` | `NekoNyan Ltd.` |
 
 未列出的组合保持原样。每组前会用红色显示组名和该组数量（例如
-`Valve（2 个）`）：
+`Valve（2 个）`）。
+
+### 收藏状态
+
+每条收藏可以记录一个状态：`想玩`、`在玩`、`已通关`、`搁置`，也可以直接写自定义状态。
+`fav list` 的表格包含「安装」和「收藏状态」两列，底部会汇总各状态数量；
+`fav list --status` 可按状态筛选，`none` / `未标记` 表示还没有设置状态。
+
+```bash
+ugal fav add 440 --status 在玩     # 添加时设置
+ugal fav status 440 已通关         # 修改
+ugal fav status 440 220 搁置       # 一次修改多个
+ugal fav status                    # 查看全部收藏状态
+ugal fav status 440                # 查看单个收藏
+ugal fav status 440 clear          # 清除（clear / 未标记 / --clear）
+ugal fav list --status 想玩        # 只看想玩
+ugal fav list --status 想玩,在玩   # 多个状态
+ugal fav list --status none        # 只看未标记
+```
+
+状态保存在 `favorites.json` 的 `status` 字段，导入导出时随收藏一起保留。常见英文
+写法会自动归一，例如 `playing` → `在玩`、`finished` / `completed` → `已通关`、
+`on-hold` → `搁置`。
 
 ```bash
 ugal fav add 440 220
@@ -432,7 +498,8 @@ ugal patch check --offline    # 输出游戏名时不联网
 `--json` 输出包含 `directory`、`total`、`ok`、`missing`、`mismatch`、
 `unverified` 和逐条 `patches`（含 `path`、`expected_hash`、`actual_hash`）。
 
-`list` 和 `fav list` 的表格中也会显示补丁状态；这两个命令的 JSON 输出中，
+`list` 和 `fav list` 的表格中也会显示补丁状态；`fav list` 还会在「哈希」列
+显示每个补丁哈希的前 8 位（多个补丁用逗号分隔）。这两个命令的 JSON 输出中，
 每款游戏同时包含 `patch`（第一条记录，兼容旧格式）和 `patches`（全部记录）。
 `patch list --json` 则按补丁记录逐条输出，同一 appid 可能出现多次。
 表格按 appid 下的补丁数量从多到少排序，包含多个补丁文件的游戏优先显示，
@@ -482,6 +549,90 @@ ugal patch check --offline    # 输出游戏名时不联网
 `--name` 指定补丁名称。只更新 `--applied` / `--not-applied` 且未指定
 `--name` 时，会作用于该 appid 的全部补丁记录。
 
+### 自动安装补丁
+
+`patch install` 会从 `<数据目录>/patches` 中递归查找补丁记录对应的压缩包，
+然后解压到 `installed.json` 记录的该 appid 游戏目录。压缩包中与游戏目录
+同名的文件会被直接替换：
+
+```bash
+ugal patch install 440                  # 安装该 appid 所有已找到的补丁记录
+ugal patch install 440 --name patch.7z  # 只安装一条记录
+ugal patch install 440 --file ~/patch.zip
+ugal patch install --all                # 所有已安装且找到文件的游戏
+ugal patch install 440 --backup         # 替换前备份原文件
+ugal patch install 440 --strip 1        # 补丁内有一层包装目录时去掉
+ugal patch install 440 --dry-run        # 只预览，不写入
+ugal patch install 440 --game-dir ~/Game  # 手动指定游戏目录
+```
+
+- 内置支持 `zip`、`tar`、`tar.gz`/`tgz`、`gz`；
+- `7z`、`rar`、`exe` 等格式需要系统中有 `7z`、`unar`、`unrar` 或 `bsdtar`，
+  ugal 会依次尝试；`exe` 只会被当作压缩包解压，不会执行安装程序；
+- 默认保留压缩包内的完整路径。如果补丁把所有文件放在一个顶层目录中，用
+  `--strip 1` 去掉这一层；
+- `--backup` 会把被替换的原文件保存到
+  `<数据目录>/patch-backups/<appid>/<时间>/`；
+- 安装成功后会把这些补丁记录标记为「已打补丁」；`--file` 还会按文件名
+  新建记录并计算 MD5；
+- 解压时会校验路径，拒绝 `../`、绝对路径等跳出游戏目录的条目。
+
+## 存档同步
+
+`ugal save sync` 会把存档备份到数据目录，`ugal save restore` 再写回原位置。
+
+云存档读取 Steam 的：
+
+```text
+<Steam根目录>/userdata/<账号ID>/<appid>/remote/
+```
+
+本地存档会扫描游戏安装目录，自动识别名为 `savedata`、`save`、`saves`、
+`savegame`、`savegames` 等目录（最多向下 3 层），找到多个时分别备份。
+标准结构为：
+
+```text
+~/.ugal/
+├── saves.json                  # 每个存档的来源路径、文件数、大小、同步时间
+└── saves/
+    └── <appid>/
+        ├── cloud/              # Steam 云存档
+        └── local/
+            ├── savedata/       # 游戏目录中的本地存档
+            └── save/           # 其他被识别到的存档目录
+```
+
+```bash
+ugal save                       # 查看已同步的存档
+ugal save sync                  # 同步所有已安装游戏的云存档 + 本地存档
+ugal save sync 440 220          # 只同步指定游戏
+ugal save sync --no-cloud       # 只同步本地存档
+ugal save sync --no-local       # 只同步云存档
+ugal save sync 440 --local-dir "D:\Game\savedata"  # 手动指定存档目录
+ugal save sync --steam-user 12345678                 # 指定 Steam 账号
+ugal save sync --dry-run        # 只统计将同步的文件
+ugal save sync --force          # 备份较新时也覆盖
+ugal save sync --mirror         # 删除备份中源目录已不存在的文件
+ugal save restore 440           # 把备份写回云存档 / 游戏目录
+ugal save restore --all         # 还原所有记录
+ugal save restore --force       # 覆盖较新的目标文件
+ugal save restore --dry-run     # 只统计将写入的文件
+ugal save remove 440            # 删除记录和备份
+ugal save remove 440 --keep     # 只删除记录，保留备份
+ugal save clear                 # 清空所有存档记录和备份
+```
+
+说明：
+
+- 默认只复制比备份更新（或备份中不存在）的文件；删除源文件不会自动删除
+  备份，需要完全镜像时使用 `--mirror`；
+- 有多个 Steam 账号时，默认使用最近修改的 `userdata` 目录；建议用
+  `ugal config steam-user <账号ID>` 固定账号；
+- `usernames`/自定义 URL 不是账号 ID，云存档需要使用数字账号 ID；
+- `--local-dir` 会应用于指定的 appid，因此需要同时给出 appid；
+- 存档同步只读写本地文件和 Steam 的 userdata 目录，不会调用 Steam Cloud
+  Web API。
+
 ## 数据文件
 
 ```text
@@ -492,7 +643,10 @@ ugal patch check --offline    # 输出游戏名时不联网
 ├── system.json      # 当前系统环境
 ├── favorites.json   # 本地游戏收藏夹
 ├── patches.json     # 补丁记录（默认输入文件，任意命令首次运行时自动创建）
-├── patches/         # 本地补丁文件（patch check 校验存在性与哈希）
+├── patches/         # 本地补丁文件（patch check 校验、patch install 解压）
+├── saves.json       # 云存档 / 本地存档同步记录
+├── saves/           # 存档备份 <appid>/cloud、<appid>/local/<目录名>
+├── patch-backups/   # patch install --backup 保存的被替换文件
 ├── appnames.json    # appid → 游戏名称缓存
 ├── publishers.json  # appid → 发行商缓存
 ├── update.json      # 最近一次源码同步与本地构建记录

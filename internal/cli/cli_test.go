@@ -1559,3 +1559,118 @@ func mustWrite(t *testing.T, path, content string) {
 func mkdir(path string) error {
 	return os.MkdirAll(path, 0o755)
 }
+
+func TestRunFavStatus(t *testing.T) {
+	dir := t.TempDir()
+	st, err := store.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var out, errBuf bytes.Buffer
+	if err := Run([]string{"--data-dir", dir, "fav", "add", "100", "--status", "playing"}, &out, &errBuf); err != nil {
+		t.Fatalf("fav add: %v (stderr %s)", err, errBuf.String())
+	}
+	fav, err := st.LoadFavorites()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fav.Games[0].Status != "在玩" {
+		t.Fatalf("status should be normalized: %#v", fav.Games)
+	}
+
+	if err := Run([]string{"--data-dir", dir, "fav", "status", "100", "已通关"}, &out, &errBuf); err != nil {
+		t.Fatalf("fav status set: %v (stderr %s)", err, errBuf.String())
+	}
+	if fav, _ = st.LoadFavorites(); fav.Games[0].Status != "已通关" {
+		t.Fatalf("status not updated: %#v", fav.Games)
+	}
+
+	out.Reset()
+	if err := Run([]string{"--data-dir", dir, "fav", "status", "100"}, &out, &errBuf); err != nil {
+		t.Fatalf("fav status show: %v", err)
+	}
+	if !strings.Contains(out.String(), "已通关") {
+		t.Fatalf("status show output = %s", out.String())
+	}
+
+	if err := Run([]string{"--data-dir", dir, "fav", "add", "300"}, &out, &errBuf); err != nil {
+		t.Fatalf("fav add 300: %v", err)
+	}
+
+	out.Reset()
+	if err := Run([]string{"--data-dir", dir, "fav", "list", "--json", "--offline"}, &out, &errBuf); err != nil {
+		t.Fatalf("fav list json: %v (stderr %s)", err, errBuf.String())
+	}
+	var payload struct {
+		Games []favoriteRow `json:"games"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &payload); err != nil {
+		t.Fatalf("json: %v\n%s", err, out.String())
+	}
+	statuses := map[int]string{}
+	for _, r := range payload.Games {
+		statuses[r.AppID] = r.FavoriteStatus
+	}
+	if statuses[100] != "已通关" || statuses[300] != "" {
+		t.Fatalf("favorite_status = %#v", statuses)
+	}
+
+	out.Reset()
+	if err := Run([]string{"--data-dir", dir, "fav", "list", "--status", "已通关", "--offline"}, &out, &errBuf); err != nil {
+		t.Fatalf("fav list --status: %v", err)
+	}
+	text := out.String()
+	if !strings.Contains(text, "100") || strings.Contains(text, "300") {
+		t.Fatalf("status filter output =\n%s", text)
+	}
+	if !strings.Contains(text, "收藏状态") {
+		t.Fatalf("fav list should show status column:\n%s", text)
+	}
+
+	out.Reset()
+	if err := Run([]string{"--data-dir", dir, "fav", "list", "--status", "none", "--offline"}, &out, &errBuf); err != nil {
+		t.Fatalf("fav list --status none: %v", err)
+	}
+	if text = out.String(); !strings.Contains(text, "300") || strings.Contains(text, "100") {
+		t.Fatalf("untagged filter output =\n%s", text)
+	}
+
+	if err := Run([]string{"--data-dir", dir, "fav", "status", "100", "clear"}, &out, &errBuf); err != nil {
+		t.Fatalf("fav status clear: %v", err)
+	}
+	if fav, _ = st.LoadFavorites(); fav.Games[0].Status != "" {
+		t.Fatalf("status not cleared: %#v", fav.Games)
+	}
+}
+
+func TestRunFavListShowsPatchHash(t *testing.T) {
+	dir := t.TempDir()
+	st, err := store.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const hash = "abcdef0123456789abcdef0123456789"
+	if err := st.SavePatches(&model.PatchesData{Patches: []model.Patch{
+		{AppID: 100, Name: "patch.bin", Hash: hash, Applied: true},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SaveFavorites(&model.FavoritesData{Games: []model.Favorite{
+		{AppID: 100, Name: "Game A", Note: "组"},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	var out, errBuf bytes.Buffer
+	if err := Run([]string{"--data-dir", dir, "fav", "list", "--offline"}, &out, &errBuf); err != nil {
+		t.Fatalf("fav list: %v (stderr %s)", err, errBuf.String())
+	}
+	text := out.String()
+	if !strings.Contains(text, "哈希") || !strings.Contains(text, "abcdef01") {
+		t.Fatalf("fav list should show shortened patch hash:\n%s", text)
+	}
+	if !strings.Contains(text, "已打补丁") {
+		t.Fatalf("fav list should show patch status:\n%s", text)
+	}
+}

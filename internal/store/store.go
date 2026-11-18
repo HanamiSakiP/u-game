@@ -28,6 +28,8 @@ const (
 	favoritesFile  = "favorites.json"
 	patchesFile    = "patches.json"
 	patchesDir     = "patches"
+	savesFile      = "saves.json"
+	savesDir       = "saves"
 	appNamesFile   = "appnames.json"
 	publishersFile = "publishers.json"
 	updateFile     = "update.json"
@@ -72,7 +74,7 @@ func looksLikeDataDir(dir string) bool {
 	for _, e := range entries {
 		switch e.Name() {
 		case configFile, ownedFile, installedFile, systemFile, favoritesFile,
-			patchesFile, appNamesFile, publishersFile, updateFile, coversDir, patchesDir, "cookie.txt", "cookies.txt", "steamdb_cookie.txt":
+			patchesFile, appNamesFile, publishersFile, updateFile, coversDir, patchesDir, savesFile, savesDir, "cookie.txt", "cookies.txt", "steamdb_cookie.txt":
 			return true
 		}
 	}
@@ -121,6 +123,12 @@ func (s *Store) PatchesPath() string { return s.Path(patchesFile) }
 
 // PatchesDir 返回存放本地补丁文件的目录（默认 <数据目录>/patches）。
 func (s *Store) PatchesDir() string { return s.Path(patchesDir) }
+
+// SavesPath 返回 saves.json 的路径。
+func (s *Store) SavesPath() string { return s.Path(savesFile) }
+
+// SavesDir 返回存档备份根目录（默认 <数据目录>/saves）。
+func (s *Store) SavesDir() string { return s.Path(savesDir) }
 
 // AppNamesPath 返回 appnames.json 的路径。
 func (s *Store) AppNamesPath() string { return s.Path(appNamesFile) }
@@ -261,6 +269,26 @@ func (s *Store) SavePatches(data *model.PatchesData) error {
 	data.UpdatedAt = time.Now().UTC()
 	data.Count = len(data.Patches)
 	return writeJSON(s.PatchesPath(), data, 0o644)
+}
+
+// LoadSaves 读取 saves.json。文件不存在时返回 os.ErrNotExist。
+func (s *Store) LoadSaves() (*model.SavesData, error) {
+	var data model.SavesData
+	if err := readJSON(s.SavesPath(), &data); err != nil {
+		return nil, err
+	}
+	return &data, nil
+}
+
+// SaveSaves 原子写入 saves.json。
+func (s *Store) SaveSaves(data *model.SavesData) error {
+	if data == nil {
+		data = &model.SavesData{}
+	}
+	data.Version = model.Version
+	data.UpdatedAt = time.Now().UTC()
+	data.Count = len(data.Saves)
+	return writeJSON(s.SavesPath(), data, 0o644)
 }
 
 // EnsurePatchesFile 在 patches.json 不存在时按内置默认模板创建补丁记录文件，

@@ -23,12 +23,16 @@ func Normalize(data *model.FavoritesData) {
 		if g.AppID <= 0 {
 			continue
 		}
+		g.Status = NormalizeStatus(g.Status)
 		if old, ok := byID[g.AppID]; ok {
 			if old.Name == "" && g.Name != "" {
 				old.Name = g.Name
 			}
 			if old.Note == "" && g.Note != "" {
 				old.Note = g.Note
+			}
+			if old.Status == "" && g.Status != "" {
+				old.Status = g.Status
 			}
 			if old.AddedAt.IsZero() && !g.AddedAt.IsZero() {
 				old.AddedAt = g.AddedAt
@@ -76,12 +80,16 @@ func Add(data *model.FavoritesData, items []model.Favorite) int {
 			if g.Note == "" && item.Note != "" {
 				g.Note = item.Note
 			}
+			if g.Status == "" && item.Status != "" {
+				g.Status = item.Status
+			}
 			if g.AddedAt.IsZero() && !item.AddedAt.IsZero() {
 				g.AddedAt = item.AddedAt
 			}
 			data.Games[idx] = g
 			continue
 		}
+		item.Status = NormalizeStatus(item.Status)
 		if item.AddedAt.IsZero() {
 			item.AddedAt = time.Now().UTC()
 		}
@@ -275,6 +283,7 @@ func decodeItem(raw json.RawMessage) (model.Favorite, bool, error) {
 			ID       int    `json:"id"`
 			Name     string `json:"name"`
 			Note     string `json:"note"`
+			Status   string `json:"status"`
 			AddedAt  string `json:"added_at"`
 		}
 		if err := json.Unmarshal(raw, &obj); err != nil {
@@ -295,6 +304,7 @@ func decodeItem(raw json.RawMessage) (model.Favorite, bool, error) {
 			AppID:   id,
 			Name:    strings.TrimSpace(obj.Name),
 			Note:    strings.TrimSpace(obj.Note),
+			Status:  NormalizeStatus(obj.Status),
 			AddedAt: addedAt,
 		}, true, nil
 	}

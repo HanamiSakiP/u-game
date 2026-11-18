@@ -13,6 +13,7 @@ const AppVersion = "0.0.1"
 type Config struct {
 	Version   int       `json:"version"`
 	SteamID   string    `json:"steamid,omitempty"`
+	SteamUser string    `json:"steam_user,omitempty"`
 	SteamDir  string    `json:"steam_dir,omitempty"`
 	Source    string    `json:"source,omitempty"`
 	UserAgent string    `json:"user_agent,omitempty"`
@@ -106,6 +107,7 @@ type Favorite struct {
 	AppID   int       `json:"appid"`
 	Name    string    `json:"name,omitempty"`
 	Note    string    `json:"note,omitempty"`
+	Status  string    `json:"status,omitempty"` // 收藏状态，如 想玩/在玩/已通关/搁置
 	AddedAt time.Time `json:"added_at,omitempty"`
 }
 
@@ -133,6 +135,44 @@ type PatchesData struct {
 	UpdatedAt time.Time `json:"updated_at"`
 	Count     int       `json:"count"`
 	Patches   []Patch   `json:"patches"`
+}
+
+// SaveLocation 是一份已同步到数据目录的存档来源。
+type SaveLocation struct {
+	// Kind 为 cloud 或 local。
+	Kind string `json:"kind"`
+	// Path 是存档的原始位置（云端为 Steam userdata 下的 remote 目录，
+	// 本地为游戏目录中的 savedata 等目录）。
+	Path string `json:"path"`
+	// Store 是数据目录中的备份目录，相对于数据目录的 saves/ 根目录。
+	Store string `json:"store"`
+	// Files / Bytes 是本次同步的文件数和总字节数。
+	Files int   `json:"files"`
+	Bytes int64 `json:"bytes"`
+	// Copied / Updated / Skipped 记录本次复制情况。
+	Copied  int `json:"copied,omitempty"`
+	Updated int `json:"updated,omitempty"`
+	Skipped int `json:"skipped,omitempty"`
+	// SyncedAt 是本次同步时间。
+	SyncedAt time.Time `json:"synced_at"`
+}
+
+// SaveGame 是一款游戏的存档同步记录。
+type SaveGame struct {
+	AppID     int            `json:"appid"`
+	Name      string         `json:"name,omitempty"`
+	GameDir   string         `json:"game_dir,omitempty"`
+	Locations []SaveLocation `json:"locations"`
+	UpdatedAt time.Time      `json:"updated_at"`
+}
+
+// SavesData 对应 .ugal/saves.json。
+type SavesData struct {
+	Version   int        `json:"version"`
+	UpdatedAt time.Time  `json:"updated_at"`
+	Count     int        `json:"count"`
+	SteamUser string     `json:"steam_user,omitempty"`
+	Saves     []SaveGame `json:"saves"`
 }
 
 // AppNamesData 对应 .ugal/appnames.json，缓存 appid 对应的游戏名称。

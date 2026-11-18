@@ -336,11 +336,11 @@ _ugal_complete() {
             *) cmd="$w"; break ;;
         esac
     done
-    local commands="sync scan list missing extra libs system cover fav patch update config cookie completion version help"
+    local commands="sync scan list missing extra libs system cover fav patch save update config cookie completion version help"
     local globals="--data-dir -d --help -h --version -v"
 
     case "$prev" in
-        --cookie-file|--src-dir|--install|--file|--data-dir|-d)
+        --cookie-file|--src-dir|--install|--file|--local-dir|--game-dir|--data-dir|-d)
             COMPREPLY=($(compgen -f -- "$cur")); return 0 ;;
         --source)
             if [ "$cmd" = "cover" ]; then
@@ -368,10 +368,11 @@ _ugal_complete() {
         list|missing|extra) opts="--json --owned --installed --missing --extra --type --limit --paths" ;;
         libs|system) opts="--json" ;;
         cover) opts="--list --force --style --source --type --concurrency --timeout --retry --json --paths" ;;
-        fav) opts="list add remove export import clear --name --note --json --installed --missing --paths --replace --all" ;;
-        patch) opts="list set remove check hash md5 sha256 --json --all --name --hash --file --md5 --sha256 --applied --not-applied --offline --dir" ;;
+        fav) opts="list add status remove export import import-patches clear --name --note --status --json --installed --missing --paths --offline --replace --clear --all" ;;
+        patch) opts="list set remove check install hash md5 sha256 --json --all --name --hash --file --md5 --sha256 --applied --not-applied --offline --dir --game-dir --strip --backup --dry-run" ;;
+        save) opts="list sync restore remove clear --json --all --no-cloud --no-local --cloud-only --local-only --local-dir --game-dir --steam-dir --steam-user --force --mirror --dry-run --paths --keep --offline" ;;
         update) opts="--src-dir --repo --branch --method --check --force --no-build --build-only --install --timeout --json" ;;
-        config) opts="steamid steam-dir source user-agent update-dir repo branch" ;;
+        config) opts="steamid steam-user steam-dir source user-agent update-dir repo branch" ;;
         cookie) opts="status get show path clear --print --browser-timeout" ;;
         completion) opts="bash zsh fish powershell --print --install --dir" ;;
     esac
@@ -394,7 +395,8 @@ _ugal() {
         'system:检测并记录系统环境'
         'cover:获取或下载游戏封面'
         'fav:本地收藏夹'
-        'patch:游戏补丁记录'
+        'patch:游戏补丁记录与自动安装'
+        'save:云存档 / 本地存档同步'
         'update:同步源码并重新构建'
         'config:查看或修改配置'
         'cookie:获取、查看或删除 SteamDB Cookie'
@@ -450,18 +452,22 @@ _ugal() {
             options=(
                 'list:查看收藏夹'
                 'add:添加收藏'
+                'status:查看或设置收藏状态'
                 'remove:删除收藏'
                 'export:导出收藏夹'
                 'import:导入收藏夹'
+                'import-patches:从 patches.json 导入收藏'
                 'clear:清空收藏夹'
                 '--name:指定游戏名称'
                 '--note:备注'
+                '--status:收藏状态（想玩/在玩/已通关/搁置）'
                 '--json:输出 JSON'
                 '--installed:只看已安装'
                 '--missing:只看未安装'
                 '--paths:显示完整封面路径'
                 '--offline:不联网获取发行商'
                 '--replace:替换现有收藏'
+                '--clear:清除收藏状态'
                 '--all:清空收藏夹'
             ) ;;
         patch)
@@ -470,6 +476,7 @@ _ugal() {
                 'set:设置补丁记录'
                 'remove:删除补丁记录'
                 'check:检查本地补丁文件是否存在且哈希正确'
+                'install:解压补丁到游戏目录并替换同名文件'
                 'hash:计算文件 MD5（默认）'
                 'md5:计算文件 MD5'
                 'sha256:计算文件 SHA-256'
@@ -484,6 +491,34 @@ _ugal() {
                 '--not-applied:标记该 appid 的全部补丁为未打补丁'
                 '--offline:不联网获取缺失的游戏名称'
                 '--dir:补丁文件目录（默认 <数据目录>/patches）'
+                '--game-dir:覆盖游戏目录'
+                '--strip:去掉压缩包顶层目录层数'
+                '--backup:替换前备份原文件'
+                '--dry-run:只显示将写入的文件'
+            ) ;;
+        save)
+            options=(
+                'list:查看已同步的存档'
+                'sync:同步云存档和本地存档到数据目录'
+                'restore:把备份写回云存档 / 游戏目录'
+                'remove:删除存档记录和备份'
+                'clear:清空所有存档记录和备份'
+                '--json:输出 JSON'
+                '--all:处理所有记录'
+                '--no-cloud:不同步/还原云存档'
+                '--no-local:不同步/还原本地存档'
+                '--cloud-only:只处理云存档'
+                '--local-only:只处理本地存档'
+                '--local-dir:显式指定本地存档目录'
+                '--game-dir:覆盖游戏目录'
+                '--steam-dir:Steam 根目录'
+                '--steam-user:Steam 账号 ID'
+                '--force:覆盖较新的文件'
+                '--mirror:删除多余文件'
+                '--dry-run:只统计不写文件'
+                '--paths:显示完整存档路径'
+                '--keep:只删除记录保留备份'
+                '--offline:输出游戏名时不联网'
             ) ;;
         update)
             options=(
@@ -502,6 +537,7 @@ _ugal() {
         config)
             options=(
                 'steamid:SteamID 或 AccountID'
+                'steam-user:Steam 账号 ID（userdata 下的数字目录）'
                 'steam-dir:Steam 根目录'
                 'source:抓取来源'
                 'user-agent:请求 User-Agent'
@@ -558,7 +594,8 @@ complete -c ugal -n '__fish_use_subcommand' -a libs -d '列出 Steam 库目录'
 complete -c ugal -n '__fish_use_subcommand' -a system -d '检测并记录系统环境'
 complete -c ugal -n '__fish_use_subcommand' -a cover -d '获取或下载游戏封面'
 complete -c ugal -n '__fish_use_subcommand' -a fav -d '本地收藏夹'
-complete -c ugal -n '__fish_use_subcommand' -a patch -d '游戏补丁记录'
+complete -c ugal -n '__fish_use_subcommand' -a patch -d '游戏补丁记录与自动安装'
+complete -c ugal -n '__fish_use_subcommand' -a save -d '云存档 / 本地存档同步'
 complete -c ugal -n '__fish_use_subcommand' -a update -d '同步源码并重新构建'
 complete -c ugal -n '__fish_use_subcommand' -a config -d '查看或修改配置'
 complete -c ugal -n '__fish_use_subcommand' -a cookie -d '获取、查看或删除 SteamDB Cookie'
@@ -602,9 +639,11 @@ complete -c ugal -n '__fish_seen_subcommand_from cover' -l retry -r -d '失败�
 complete -c ugal -n '__fish_seen_subcommand_from cover' -l json -d '输出 JSON'
 complete -c ugal -n '__fish_seen_subcommand_from cover' -l paths -d '显示完整封面路径'
 
-complete -c ugal -n '__fish_seen_subcommand_from fav' -a 'list add remove export import clear'
+complete -c ugal -n '__fish_seen_subcommand_from fav' -a 'list add status remove export import import-patches clear'
 complete -c ugal -n '__fish_seen_subcommand_from fav' -l name -r -d '指定游戏名称'
 complete -c ugal -n '__fish_seen_subcommand_from fav' -l note -r -d '备注'
+complete -c ugal -n '__fish_seen_subcommand_from fav' -l status -xa '想玩 在玩 已通关 搁置 clear' -d '收藏状态'
+complete -c ugal -n '__fish_seen_subcommand_from fav' -l clear -d '清除收藏状态'
 complete -c ugal -n '__fish_seen_subcommand_from fav' -l json -d '输出 JSON'
 complete -c ugal -n '__fish_seen_subcommand_from fav' -l installed -d '只看已安装'
 complete -c ugal -n '__fish_seen_subcommand_from fav' -l missing -d '只看未安装'
@@ -613,7 +652,7 @@ complete -c ugal -n '__fish_seen_subcommand_from fav' -l offline -d '不联网�
 complete -c ugal -n '__fish_seen_subcommand_from fav' -l replace -d '替换现有收藏'
 complete -c ugal -n '__fish_seen_subcommand_from fav' -l all -d '清空收藏夹'
 
-complete -c ugal -n '__fish_seen_subcommand_from patch' -a 'list set remove check hash md5 sha256'
+complete -c ugal -n '__fish_seen_subcommand_from patch' -a 'list set remove check install hash md5 sha256'
 complete -c ugal -n '__fish_seen_subcommand_from patch' -l json -d '输出 JSON'
 complete -c ugal -n '__fish_seen_subcommand_from patch' -l all -d '包含没有记录的游戏'
 complete -c ugal -n '__fish_seen_subcommand_from patch' -l name -r -d '补丁名称'
@@ -625,6 +664,28 @@ complete -c ugal -n '__fish_seen_subcommand_from patch' -l applied -d '标记该
 complete -c ugal -n '__fish_seen_subcommand_from patch' -l not-applied -d '标记该 appid 的全部补丁为未打补丁'
 complete -c ugal -n '__fish_seen_subcommand_from patch' -l offline -d '不联网获取缺失的游戏名称'
 complete -c ugal -n '__fish_seen_subcommand_from patch' -l dir -r -F -d '补丁文件目录（默认 <数据目录>/patches）'
+complete -c ugal -n '__fish_seen_subcommand_from patch' -l game-dir -r -F -d '覆盖游戏目录'
+complete -c ugal -n '__fish_seen_subcommand_from patch' -l strip -r -d '去掉压缩包顶层目录层数'
+complete -c ugal -n '__fish_seen_subcommand_from patch' -l backup -d '替换前备份原文件'
+complete -c ugal -n '__fish_seen_subcommand_from patch' -l dry-run -d '只显示将写入的文件'
+
+complete -c ugal -n '__fish_seen_subcommand_from save' -a 'list sync restore remove clear'
+complete -c ugal -n '__fish_seen_subcommand_from save' -l json -d '输出 JSON'
+complete -c ugal -n '__fish_seen_subcommand_from save' -l all -d '处理所有记录'
+complete -c ugal -n '__fish_seen_subcommand_from save' -l no-cloud -d '不同步/还原云存档'
+complete -c ugal -n '__fish_seen_subcommand_from save' -l no-local -d '不同步/还原本地存档'
+complete -c ugal -n '__fish_seen_subcommand_from save' -l cloud-only -d '只处理云存档'
+complete -c ugal -n '__fish_seen_subcommand_from save' -l local-only -d '只处理本地存档'
+complete -c ugal -n '__fish_seen_subcommand_from save' -l local-dir -r -F -d '本地存档目录'
+complete -c ugal -n '__fish_seen_subcommand_from save' -l game-dir -r -F -d '覆盖游戏目录'
+complete -c ugal -n '__fish_seen_subcommand_from save' -l steam-dir -r -F -d 'Steam 根目录'
+complete -c ugal -n '__fish_seen_subcommand_from save' -l steam-user -r -d 'Steam 账号 ID'
+complete -c ugal -n '__fish_seen_subcommand_from save' -l force -d '覆盖较新的文件'
+complete -c ugal -n '__fish_seen_subcommand_from save' -l mirror -d '删除多余文件'
+complete -c ugal -n '__fish_seen_subcommand_from save' -l dry-run -d '只统计不写文件'
+complete -c ugal -n '__fish_seen_subcommand_from save' -l paths -d '显示完整存档路径'
+complete -c ugal -n '__fish_seen_subcommand_from save' -l keep -d '只删除记录保留备份'
+complete -c ugal -n '__fish_seen_subcommand_from save' -l offline -d '输出游戏名时不联网'
 
 complete -c ugal -n '__fish_seen_subcommand_from update' -l src-dir -r -d '源码目录'
 complete -c ugal -n '__fish_seen_subcommand_from update' -l repo -r -d '源码仓库'
@@ -655,7 +716,7 @@ Register-ArgumentCompleter -Native -CommandName ugal -ScriptBlock {
     param($wordToComplete, $commandAst, $cursorPosition)
     $elements = $commandAst.CommandElements
     $cmd = if ($elements.Count -gt 1) { $elements[1].Value } else { '' }
-    $commands = @('sync','scan','list','missing','extra','libs','system','cover','fav','patch','update','config','cookie','completion','version','help')
+    $commands = @('sync','scan','list','missing','extra','libs','system','cover','fav','patch','save','update','config','cookie','completion','version','help')
     $globalOptions = @('--data-dir','-d','--help','-h','--version','-v')
     $options = switch ($cmd) {
         'sync' { @('--source','--cookie','--cookie-file','--user-agent','--browser','--browser-timeout','--timeout') }
@@ -666,10 +727,11 @@ Register-ArgumentCompleter -Native -CommandName ugal -ScriptBlock {
         'libs' { @('--json') }
         'system' { @('--json') }
         'cover' { @('--list','--force','--style','--source','--type','--concurrency','--timeout','--retry','--json','--paths') }
-        'fav' { @('list','add','remove','export','import','clear','--name','--note','--json','--installed','--missing','--paths','--replace','--all') }
-        'patch' { @('list','set','remove','check','hash','md5','sha256','--json','--all','--name','--hash','--file','--md5','--sha256','--applied','--not-applied','--offline','--dir') }
+        'fav' { @('list','add','status','remove','export','import','import-patches','clear','--name','--note','--status','--json','--installed','--missing','--paths','--offline','--replace','--clear','--all') }
+        'patch' { @('list','set','remove','check','install','hash','md5','sha256','--json','--all','--name','--hash','--file','--md5','--sha256','--applied','--not-applied','--offline','--dir','--game-dir','--strip','--backup','--dry-run') }
+        'save' { @('list','sync','restore','remove','clear','--json','--all','--no-cloud','--no-local','--cloud-only','--local-only','--local-dir','--game-dir','--steam-dir','--steam-user','--force','--mirror','--dry-run','--paths','--keep','--offline') }
         'update' { @('--src-dir','--repo','--branch','--method','--check','--force','--no-build','--build-only','--install','--timeout','--json') }
-        'config' { @('steamid','steam-dir','source','user-agent','update-dir','repo','branch') }
+        'config' { @('steamid','steam-user','steam-dir','source','user-agent','update-dir','repo','branch') }
         'cookie' { @('status','get','show','path','clear','--print','--browser-timeout') }
         'completion' { @('bash','zsh','fish','powershell','--print','--install','--dir') }
         default { @() }
