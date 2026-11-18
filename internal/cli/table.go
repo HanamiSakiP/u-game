@@ -4,10 +4,51 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"strconv"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
+
+const (
+	ansiReset = "\x1b[0m"
+	ansiRed   = "\x1b[31m"
+	ansiGreen = "\x1b[32m"
+)
+
+// isTerminal 判断输出目标是终端。
+func isTerminal(w io.Writer) bool {
+	f, ok := w.(*os.File)
+	if !ok {
+		return false
+	}
+	info, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	return info.Mode()&os.ModeCharDevice != 0
+}
+
+// colorEnabled 判断输出是否适合使用 ANSI 颜色：仅在终端输出且未设置
+// NO_COLOR、TERM=dumb 时启用，管道和文件重定向保持纯文本。
+func colorEnabled(w io.Writer) bool {
+	if strings.TrimSpace(os.Getenv("NO_COLOR")) != "" {
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("TERM")), "dumb") {
+		return false
+	}
+	return isTerminal(w)
+}
+
+// colorize 在启用颜色时用指定 ANSI 码包裹文本。
+func colorize(enabled bool, code, s string) string {
+	if !enabled || s == "" {
+		return s
+	}
+	return code + s + ansiReset
+}
 
 func writeJSONOutput(w io.Writer, v interface{}) error {
 	enc := json.NewEncoder(w)
@@ -17,6 +58,49 @@ func writeJSONOutput(w io.Writer, v interface{}) error {
 
 // renderTable 按终端显示宽度对齐输出表格（兼容中英文混排）。
 func renderTable(w io.Writer, headers []string, right []bool, rows [][]string) {
+	widths := tableWidths(headers, rows)
+	var b strings.Builder
+	b.WriteString(tableRow(headers, right, widths, headers))
+	b.WriteString(tableRow(headers, right, widths, tableSeparator(widths)))
+	for _, row := range rows {
+		b.WriteString(tableRow(headers, right, widths, row))
+	}
+	fmt.Fprint(w, b.String())
+}
+
+// tableGroup 是分组表格中的一组：Label 是组标题，Rows 是该组的数据行。
+type tableGroup struct {
+	Label string
+	Rows  [][]string
+}
+
+// renderGroupedTable 输出带分组标题的表格：列宽跨所有分组统一计算，
+// 每组数据行前输出一行红色组标题。输出不是终端时标题自动使用纯文本。
+func renderGroupedTable(w io.Writer, headers []string, right []bool, groups []tableGroup) {
+	var all [][]string
+	for _, g := range groups {
+		all = append(all, g.Rows...)
+	}
+	widths := tableWidths(headers, all)
+
+	var b strings.Builder
+	b.WriteString(tableRow(headers, right, widths, headers))
+	b.WriteString(tableRow(headers, right, widths, tableSeparator(widths)))
+	colored := colorEnabled(w)
+	for i, g := range groups {
+		if i > 0 {
+			b.WriteString("\n")
+		}
+		b.WriteString(colorize(colored, ansiRed, g.Label))
+		b.WriteString("\n")
+		for _, row := range g.Rows {
+			b.WriteString(tableRow(headers, right, widths, row))
+		}
+	}
+	fmt.Fprint(w, b.String())
+}
+
+func tableWidths(headers []string, rows [][]string) []int {
 	widths := make([]int, len(headers))
 	for i, h := range headers {
 		widths[i] = displayWidth(h)
@@ -28,48 +112,60 @@ func renderTable(w io.Writer, headers []string, right []bool, rows [][]string) {
 			}
 		}
 	}
+	return widths
+}
 
-	var b strings.Builder
-	writeRow := func(cells []string) {
-		for i := range headers {
-			if i > 0 {
-				b.WriteString("  ")
-			}
-			cell := ""
-			if i < len(cells) {
-				cell = cells[i]
-			}
-			pad := widths[i] - displayWidth(cell)
-			if pad < 0 {
-				pad = 0
-			}
-			if right[i] {
-				b.WriteString(strings.Repeat(" ", pad))
-				b.WriteString(cell)
-			} else {
-				b.WriteString(cell)
-				b.WriteString(strings.Repeat(" ", pad))
-			}
-		}
-		b.WriteString("\n")
-	}
-
-	writeRow(headers)
-	sep := make([]string, len(headers))
+func tableSeparator(widths []int) []string {
+	sep := make([]string, len(widths))
 	for i := range sep {
 		sep[i] = strings.Repeat("-", widths[i])
 	}
-	writeRow(sep)
-	for _, row := range rows {
-		writeRow(row)
-	}
-	fmt.Fprint(w, b.String())
+	return sep
 }
 
+func tableRow(headers []string, right []bool, widths []int, cells []string) string {
+	var b strings.Builder
+	for i := range headers {
+		if i > 0 {
+			b.WriteString("  ")
+		}
+		cell := ""
+		if i < len(cells) {
+			cell = cells[i]
+		}
+		pad := widths[i] - displayWidth(cell)
+		if pad < 0 {
+			pad = 0
+		}
+		if right[i] {
+			b.WriteString(strings.Repeat(" ", pad))
+			b.WriteString(cell)
+		} else {
+			b.WriteString(cell)
+			b.WriteString(strings.Repeat(" ", pad))
+		}
+	}
+	b.WriteString("\n")
+	return b.String()
+}
+
+// displayWidth 返回终端显示宽度；ANSI 颜色序列不占宽度。
 func displayWidth(s string) int {
 	w := 0
-	for _, r := range s {
+	for i := 0; i < len(s); {
+		if s[i] == 0x1b && i+1 < len(s) && s[i+1] == '[' {
+			i += 2
+			for i < len(s) && !(s[i] >= 0x40 && s[i] <= 0x7e) {
+				i++
+			}
+			if i < len(s) {
+				i++
+			}
+			continue
+		}
+		r, size := utf8.DecodeRuneInString(s[i:])
 		w += runeWidth(r)
+		i += size
 	}
 	return w
 }

@@ -36,7 +36,7 @@ const (
 
 // Options 控制一次更新流程。
 type Options struct {
-	// SourceDir 是源码保存目录，必须提供（CLI 默认使用 <当前目录>/.ugal/src）。
+	// SourceDir 是源码保存目录，必须提供（CLI 默认使用 <数据目录>/src）。
 	SourceDir string
 	// Repo 是 owner/name 或 GitHub 地址，默认 github.com/HanamiSakiP/u-game。
 	Repo string

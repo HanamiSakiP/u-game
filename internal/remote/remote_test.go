@@ -133,6 +133,38 @@ func TestSteamID64(t *testing.T) {
 	}
 }
 
+func TestCommunityGamesURLKeepsRawID(t *testing.T) {
+	cases := map[string]string{
+		"76561197960287930": "https://steamcommunity.com/profiles/76561197960287930/games/?tab=all&xml=1",
+		"22202":             "https://steamcommunity.com/id/22202/games/?tab=all&xml=1",
+		"gabelogannewell":   "https://steamcommunity.com/id/gabelogannewell/games/?tab=all&xml=1",
+	}
+	for in, want := range cases {
+		if got := communityGamesURL(in); got != want {
+			t.Errorf("communityGamesURL(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestCanonicalSteamID(t *testing.T) {
+	cases := map[string]string{
+		"76561197960287930": "76561197960287930",
+		"22202":             "76561197960287930",
+		"STEAM_1:0:11101":   "76561197960287930",
+		"[U:1:22202]":       "76561197960287930",
+		"https://steamcommunity.com/profiles/76561197960287930/": "76561197960287930",
+		"gabelogannewell": "gabelogannewell",
+	}
+	for in, want := range cases {
+		if got := CanonicalSteamID(in); got != want {
+			t.Errorf("CanonicalSteamID(%q) = %q, want %q", in, got, want)
+		}
+	}
+	if got := SteamDBCalculatorURL("22202"); got != "https://steamdb.info/calculator/76561197960287930/" {
+		t.Fatalf("calculator url = %q", got)
+	}
+}
+
 func TestCookieHeaderFor(t *testing.T) {
 	netscape := strings.Join([]string{
 		"# Netscape HTTP Cookie File",

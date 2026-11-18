@@ -79,3 +79,44 @@ func TestIsSourceDir(t *testing.T) {
 		t.Fatal("module should be detected")
 	}
 }
+
+func TestDefaultSourceDirUsesDataDir(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("UGAL_DIR", dataDir)
+	got, err := DefaultSourceDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(dataDir, "src")
+	if got != want {
+		t.Fatalf("default source dir = %q, want %q", got, want)
+	}
+}
+
+func TestBootstrapWritesIntoDataDir(t *testing.T) {
+	work := t.TempDir()
+	old, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(work); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chdir(old)
+
+	dataDir := filepath.Join(t.TempDir(), "data")
+	dir, written, err := Bootstrap(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !written {
+		t.Fatal("bootstrap should write embedded source")
+	}
+	want := filepath.Join(dataDir, "src")
+	if dir != want {
+		t.Fatalf("bootstrap dir = %q, want %q", dir, want)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "cmd", "ugal", "main.go")); err != nil {
+		t.Fatal(err)
+	}
+}

@@ -2,6 +2,7 @@
 package store
 
 import (
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,15 +14,24 @@ import (
 	"github.com/HanamiSakiP/u-game/internal/model"
 )
 
+// defaultPatchesJSON 是新建数据目录时写入 patches.json 的默认内容，
+// 可以直接编辑 internal/store/default_patches.json 后重新构建。
+//
+//go:embed default_patches.json
+var defaultPatchesJSON []byte
+
 const (
-	configFile    = "config.json"
-	ownedFile     = "owned.json"
-	installedFile = "installed.json"
-	systemFile    = "system.json"
-	favoritesFile = "favorites.json"
-	patchesFile   = "patches.json"
-	updateFile    = "update.json"
-	coversDir     = "covers"
+	configFile     = "config.json"
+	ownedFile      = "owned.json"
+	installedFile  = "installed.json"
+	systemFile     = "system.json"
+	favoritesFile  = "favorites.json"
+	patchesFile    = "patches.json"
+	patchesDir     = "patches"
+	appNamesFile   = "appnames.json"
+	publishersFile = "publishers.json"
+	updateFile     = "update.json"
+	coversDir      = "covers"
 )
 
 // Store 表示一个 ugal 数据目录。
@@ -31,8 +41,8 @@ type Store struct {
 
 // DefaultDir 返回默认数据目录：UGAL_DIR > 当前目录下的 .ugal > ~/.ugal。
 //
-// 当前目录的 .ugal 只存放了源码（如 ugal update 创建的 .ugal/src）时不算数据目录，
-// 避免创建源码目录后意外切换数据位置。
+// 当前目录的 .ugal 只存放了旧版源码（src/）时不算数据目录，避免创建源码目录后
+// 意外切换数据位置。
 func DefaultDir() (string, error) {
 	if dir := strings.TrimSpace(os.Getenv("UGAL_DIR")); dir != "" {
 		return expandHome(dir)
@@ -62,7 +72,7 @@ func looksLikeDataDir(dir string) bool {
 	for _, e := range entries {
 		switch e.Name() {
 		case configFile, ownedFile, installedFile, systemFile, favoritesFile,
-			patchesFile, updateFile, coversDir, "cookie.txt", "cookies.txt", "steamdb_cookie.txt":
+			patchesFile, appNamesFile, publishersFile, updateFile, coversDir, patchesDir, "cookie.txt", "cookies.txt", "steamdb_cookie.txt":
 			return true
 		}
 	}
@@ -108,6 +118,15 @@ func (s *Store) FavoritesPath() string { return s.Path(favoritesFile) }
 
 // PatchesPath 返回 patches.json 的路径。
 func (s *Store) PatchesPath() string { return s.Path(patchesFile) }
+
+// PatchesDir 返回存放本地补丁文件的目录（默认 <数据目录>/patches）。
+func (s *Store) PatchesDir() string { return s.Path(patchesDir) }
+
+// AppNamesPath 返回 appnames.json 的路径。
+func (s *Store) AppNamesPath() string { return s.Path(appNamesFile) }
+
+// PublishersPath 返回 publishers.json 的路径。
+func (s *Store) PublishersPath() string { return s.Path(publishersFile) }
 
 // UpdatePath 返回 update.json 的路径。
 func (s *Store) UpdatePath() string { return s.Path(updateFile) }
@@ -244,6 +263,98 @@ func (s *Store) SavePatches(data *model.PatchesData) error {
 	return writeJSON(s.PatchesPath(), data, 0o644)
 }
 
+// EnsurePatchesFile 在 patches.json 不存在时按内置默认模板创建补丁记录文件，
+// 让用户可以直接手工编辑该文件。返回 true 表示本次新建了文件。
+func (s *Store) EnsurePatchesFile() (bool, error) {
+	path := s.PatchesPath()
+	if _, err := os.Stat(path); err == nil {
+		return false, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return false, fmt.Errorf("检查 %s 失败: %w", path, err)
+	}
+	data := &model.PatchesData{Version: model.Version, Patches: []model.Patch{}}
+	if len(defaultPatchesJSON) > 0 {
+		if err := json.Unmarshal(defaultPatchesJSON, data); err != nil {
+			return false, fmt.Errorf("解析内置默认补丁记录失败: %w", err)
+		}
+	}
+	data.Version = model.Version
+	data.UpdatedAt = time.Now().UTC()
+	data.Count = len(data.Patches)
+	if err := writeJSON(path, data, 0o644); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// LoadAppNames 读取 appnames.json。文件不存在时返回 os.ErrNotExist。
+func (s *Store) LoadAppNames() (*model.AppNamesData, error) {
+	var data model.AppNamesData
+	if err := readJSON(s.AppNamesPath(), &data); err != nil {
+		return nil, err
+	}
+	if data.Names == nil {
+		data.Names = map[string]string{}
+	}
+	return &data, nil
+}
+
+// SaveAppNames 原子写入 appnames.json。
+func (s *Store) SaveAppNames(data *model.AppNamesData) error {
+	if data == nil {
+		data = &model.AppNamesData{}
+	}
+	if data.Names == nil {
+		data.Names = map[string]string{}
+	}
+	for id, name := range data.Names {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			delete(data.Names, id)
+			continue
+		}
+		data.Names[id] = name
+	}
+	data.Version = model.Version
+	data.UpdatedAt = time.Now().UTC()
+	data.Count = len(data.Names)
+	return writeJSON(s.AppNamesPath(), data, 0o644)
+}
+
+// LoadPublishers 读取 publishers.json。文件不存在时返回 os.ErrNotExist。
+func (s *Store) LoadPublishers() (*model.PublishersData, error) {
+	var data model.PublishersData
+	if err := readJSON(s.PublishersPath(), &data); err != nil {
+		return nil, err
+	}
+	if data.Publishers == nil {
+		data.Publishers = map[string]string{}
+	}
+	return &data, nil
+}
+
+// SavePublishers 原子写入 publishers.json。
+func (s *Store) SavePublishers(data *model.PublishersData) error {
+	if data == nil {
+		data = &model.PublishersData{}
+	}
+	if data.Publishers == nil {
+		data.Publishers = map[string]string{}
+	}
+	for id, publisher := range data.Publishers {
+		publisher = strings.TrimSpace(publisher)
+		if publisher == "" {
+			delete(data.Publishers, id)
+			continue
+		}
+		data.Publishers[id] = publisher
+	}
+	data.Version = model.Version
+	data.UpdatedAt = time.Now().UTC()
+	data.Count = len(data.Publishers)
+	return writeJSON(s.PublishersPath(), data, 0o644)
+}
+
 // LoadUpdate 读取 update.json。文件不存在时返回 os.ErrNotExist。
 func (s *Store) LoadUpdate() (*model.UpdateData, error) {
 	var data model.UpdateData
@@ -263,11 +374,20 @@ func (s *Store) SaveUpdate(data *model.UpdateData) error {
 	return writeJSON(s.UpdatePath(), data, 0o644)
 }
 
+// CookieFiles 按优先级返回可能包含 SteamDB Cookie 的文件路径。
+func (s *Store) CookieFiles() []string {
+	return []string{
+		s.Path("cookie.txt"),
+		s.Path("cookies.txt"),
+		s.Path("steamdb_cookie.txt"),
+	}
+}
+
 // LoadCookie 依次查找 .ugal 目录下的 Cookie 文件并返回原始内容。
 // 支持 cookie.txt、cookies.txt、steamdb_cookie.txt。
 func (s *Store) LoadCookie() string {
-	for _, name := range []string{"cookie.txt", "cookies.txt", "steamdb_cookie.txt"} {
-		data, err := os.ReadFile(s.Path(name))
+	for _, path := range s.CookieFiles() {
+		data, err := os.ReadFile(path)
 		if err == nil {
 			text := strings.TrimSpace(string(data))
 			if text != "" {

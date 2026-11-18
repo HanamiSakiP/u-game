@@ -1,6 +1,7 @@
 package store
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -66,6 +67,41 @@ func TestStoreRoundTrip(t *testing.T) {
 	}
 	if _, err := st.LoadInstalled(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestEnsurePatchesFile(t *testing.T) {
+	st, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	written, err := st.EnsurePatchesFile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !written {
+		t.Fatal("expected patches.json to be created")
+	}
+	data, err := st.LoadPatches()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var tmpl model.PatchesData
+	if err := json.Unmarshal(defaultPatchesJSON, &tmpl); err != nil {
+		t.Fatalf("default template: %v", err)
+	}
+	if data.Count != len(tmpl.Patches) || len(data.Patches) != len(tmpl.Patches) {
+		t.Fatalf("patches = %d, template = %d", len(data.Patches), len(tmpl.Patches))
+	}
+	if data.Count != len(data.Patches) {
+		t.Fatalf("count mismatch: %#v", data)
+	}
+	again, err := st.EnsurePatchesFile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again {
+		t.Fatal("existing patches.json should not be rewritten")
 	}
 }
 
@@ -138,6 +174,42 @@ func TestStoreSystemAndFavorites(t *testing.T) {
 	}
 	if loadedPatches.Count != 1 || loadedPatches.Patches[0].Name != "HD Patch" {
 		t.Fatalf("patches = %#v", loadedPatches)
+	}
+
+	names := &model.AppNamesData{Names: map[string]string{
+		"440": "Team Fortress 2",
+		"220": "  ",
+	}}
+	if err := st.SaveAppNames(names); err != nil {
+		t.Fatal(err)
+	}
+	loadedNames, err := st.LoadAppNames()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loadedNames.Count != 1 || loadedNames.Names["440"] != "Team Fortress 2" {
+		t.Fatalf("app names = %#v", loadedNames)
+	}
+	if _, ok := loadedNames.Names["220"]; ok {
+		t.Fatalf("empty app name should be dropped: %#v", loadedNames.Names)
+	}
+
+	publishers := &model.PublishersData{Publishers: map[string]string{
+		"440": "Valve",
+		"220": "  ",
+	}}
+	if err := st.SavePublishers(publishers); err != nil {
+		t.Fatal(err)
+	}
+	loadedPublishers, err := st.LoadPublishers()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loadedPublishers.Count != 1 || loadedPublishers.Publishers["440"] != "Valve" {
+		t.Fatalf("publishers = %#v", loadedPublishers)
+	}
+	if _, ok := loadedPublishers.Publishers["220"]; ok {
+		t.Fatalf("empty publisher should be dropped: %#v", loadedPublishers.Publishers)
 	}
 }
 

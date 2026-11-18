@@ -41,7 +41,15 @@ type Options struct {
 
 // Fetch 按 source 获取已拥有游戏，auto 模式会依次尝试 SteamDB、Steam 社区、官方 API。
 func Fetch(ctx context.Context, opts Options) (*model.OwnedData, error) {
-	id := NormalizeSteamID(opts.SteamID)
+	source := strings.ToLower(strings.TrimSpace(opts.Source))
+	if source == "" || source == "auto" {
+		source = "auto"
+	}
+	// 社区来源直接使用原始标识（自定义 URL、数字昵称等），不做 SteamID64 转换。
+	id := CanonicalSteamID(opts.SteamID)
+	if source == "community" {
+		id = NormalizeSteamID(opts.SteamID)
+	}
 	if id == "" {
 		return nil, errors.New("SteamID 不能为空")
 	}
@@ -58,10 +66,6 @@ func Fetch(ctx context.Context, opts Options) (*model.OwnedData, error) {
 		logf = func(string, ...interface{}) {}
 	}
 
-	source := strings.ToLower(strings.TrimSpace(opts.Source))
-	if source == "" || source == "auto" {
-		source = "auto"
-	}
 	order := []string{source}
 	if source == "auto" {
 		order = []string{"steamdb", "community", "api"}
@@ -119,8 +123,7 @@ func Fetch(ctx context.Context, opts Options) (*model.OwnedData, error) {
 }
 
 func fetchSteamDB(ctx context.Context, client *http.Client, id, cookie, ua string) ([]model.OwnedGame, error) {
-	rawURL := "https://steamdb.info/calculator/" + url.PathEscape(id) + "/"
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, SteamDBCalculatorURL(id), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -143,12 +146,12 @@ func fetchSteamDB(ctx context.Context, client *http.Client, id, cookie, ua strin
 	}
 	if resp.StatusCode != http.StatusOK {
 		if isChallenge(body) {
-			return nil, fmt.Errorf("SteamDB 返回 HTTP %d（Cloudflare 验证页），请提供浏览器 Cookie", resp.StatusCode)
+			return nil, fmt.Errorf("SteamDB 返回 HTTP %d（Cloudflare 验证页），请加 `--browser` 用浏览器验证，或提供浏览器 Cookie", resp.StatusCode)
 		}
 		return nil, fmt.Errorf("SteamDB 返回 HTTP %d", resp.StatusCode)
 	}
 	if isChallenge(body) {
-		return nil, errors.New("SteamDB 返回 Cloudflare 验证页，请在浏览器通过验证后导出 Cookie 到 .ugal/cookie.txt")
+		return nil, errors.New("SteamDB 返回 Cloudflare 验证页，请加 `--browser` 用浏览器验证，或提供浏览器 Cookie")
 	}
 	text := string(body)
 	for _, marker := range []string{"This profile is private", "profile is private", "Private Profile"} {
@@ -345,16 +348,19 @@ func isChallenge(body []byte) bool {
 	return false
 }
 
+// communityGamesURL 按原始标识拼出 Steam 社区游戏列表地址。
+// 只有 17 位 SteamID64 使用 /profiles/ 路径，其余（自定义 URL、数字昵称等）
+// 原样使用 /id/ 路径，避免把 user 提供的标识转换成其他账号。
+func communityGamesURL(id string) string {
+	const base = "https://steamcommunity.com/"
+	if isDigits(id) && len(id) == 17 {
+		return base + "profiles/" + url.PathEscape(id) + "/games/?tab=all&xml=1"
+	}
+	return base + "id/" + url.PathEscape(id) + "/games/?tab=all&xml=1"
+}
+
 func fetchCommunity(ctx context.Context, client *http.Client, id, ua string) ([]model.OwnedGame, error) {
-	id64 := SteamID64(id)
-	profile := id64
-	if profile == "" {
-		profile = id
-	}
-	rawURL := "https://steamcommunity.com/profiles/" + url.PathEscape(profile) + "/games/?tab=all&xml=1"
-	if id64 == "" {
-		rawURL = "https://steamcommunity.com/id/" + url.PathEscape(id) + "/games/?tab=all&xml=1"
-	}
+	rawURL := communityGamesURL(id)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return nil, err
@@ -536,6 +542,24 @@ func sortGames(games []model.OwnedGame) {
 		}
 		return games[i].AppID < games[j].AppID
 	})
+}
+
+// CanonicalSteamID 把输入的 SteamID、AccountID（32 位账号 ID）、SteamID2/3
+// 或资料 URL 统一转换为 17 位 SteamID64；自定义 URL 等无法转换的标识原样返回。
+func CanonicalSteamID(raw string) string {
+	id := NormalizeSteamID(raw)
+	if id == "" {
+		return ""
+	}
+	if id64 := SteamID64(id); id64 != "" {
+		return id64
+	}
+	return id
+}
+
+// SteamDBCalculatorURL 返回 SteamDB 的账号计算器页面地址。
+func SteamDBCalculatorURL(id string) string {
+	return "https://steamdb.info/calculator/" + url.PathEscape(CanonicalSteamID(id)) + "/"
 }
 
 // NormalizeSteamID 从 SteamID、资料 URL 或自定义 URL 中提取可用标识。

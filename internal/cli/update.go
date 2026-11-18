@@ -6,7 +6,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -14,18 +13,15 @@ import (
 	"github.com/HanamiSakiP/u-game/internal/selfupdate"
 )
 
-// defaultSrcDir 返回默认源码目录：当前工作目录下的 .ugal/src。
+// defaultSrcDir 返回默认源码目录：数据目录下的 src（默认 ~/.ugal/src）。
 func (a *app) defaultSrcDir() string {
-	if cwd, err := os.Getwd(); err == nil {
-		return filepath.Join(cwd, ".ugal", "src")
-	}
 	return a.store.SrcDir()
 }
 
 func (a *app) cmdUpdate(args []string) error {
 	fs := flag.NewFlagSet("update", flag.ContinueOnError)
 	fs.SetOutput(a.err)
-	srcDir := fs.String("src-dir", "", "源码目录（默认 <当前目录>/.ugal/src）")
+	srcDir := fs.String("src-dir", "", "源码目录（默认 <数据目录>/src）")
 	repo := fs.String("repo", "", "源码仓库（默认 github.com/HanamiSakiP/u-game）")
 	branch := fs.String("branch", "", "同步分支（默认 main）")
 	method := fs.String("method", "", "同步方式: auto、git、archive")

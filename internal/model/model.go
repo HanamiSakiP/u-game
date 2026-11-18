@@ -117,7 +117,8 @@ type FavoritesData struct {
 	Games     []Favorite `json:"games"`
 }
 
-// Patch 是某款游戏的补丁记录。没有记录时视为「无补丁」。
+// Patch 是某款游戏的一条补丁记录。同一 appid 可以有多条记录，
+// 以 Name 区分不同的补丁文件。没有记录时视为「无补丁」。
 type Patch struct {
 	AppID     int       `json:"appid"`
 	Name      string    `json:"name,omitempty"`
@@ -132,6 +133,24 @@ type PatchesData struct {
 	UpdatedAt time.Time `json:"updated_at"`
 	Count     int       `json:"count"`
 	Patches   []Patch   `json:"patches"`
+}
+
+// AppNamesData 对应 .ugal/appnames.json，缓存 appid 对应的游戏名称。
+// 名称可能来自 Steam 本地 appinfo.vdf 或 Steam Web API。
+type AppNamesData struct {
+	Version   int               `json:"version"`
+	UpdatedAt time.Time         `json:"updated_at"`
+	Count     int               `json:"count"`
+	Names     map[string]string `json:"names"`
+}
+
+// PublishersData 对应 .ugal/publishers.json，缓存 appid 对应的发行商。
+// 发行商通过 Steam Store appdetails 接口获取。
+type PublishersData struct {
+	Version    int               `json:"version"`
+	UpdatedAt  time.Time         `json:"updated_at"`
+	Count      int               `json:"count"`
+	Publishers map[string]string `json:"publishers"`
 }
 
 // UpdateData 对应 .ugal/update.json，记录最近一次源码同步与本地构建。

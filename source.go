@@ -1,8 +1,8 @@
 // Package ugal 提供内嵌的 ugal 源码，并支持把源码释放到本地目录。
 //
 // 源码在构建时通过 go:embed 打包进二进制；运行任意 ugal 命令时，
-// cmd/ugal 会把源码写入 ./.ugal/src（已存在则不覆盖），方便离线查看、
-// 修改和本地构建。更新远程版本仍使用 `ugal update`。
+// cmd/ugal 会把源码写入数据目录下的 src（默认 ~/.ugal/src，已存在则不覆盖），
+// 方便离线查看、修改和本地构建。更新远程版本仍使用 `ugal update`。
 package ugal
 
 import (
@@ -11,28 +11,39 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/HanamiSakiP/u-game/internal/store"
 )
 
 //go:embed all:cmd all:internal go.mod README.md source.go source_test.go
 var embedded embed.FS
 
-// DefaultSourceDir 返回默认源码目录：当前工作目录下的 .ugal/src。
+// DefaultSourceDir 返回默认源码目录：数据目录下的 src（默认 ~/.ugal/src）。
 func DefaultSourceDir() (string, error) {
-	cwd, err := os.Getwd()
+	dir, err := store.DefaultDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(cwd, ".ugal", "src"), nil
+	return filepath.Join(dir, "src"), nil
 }
 
-// Bootstrap 在需要时把内嵌源码写入 ./.ugal/src，并返回该目录。
+// Bootstrap 在需要时把内嵌源码写入数据目录下的 src，并返回该目录。
 //
+// dataDir 为空时使用默认数据目录（~/.ugal，或当前目录下已有数据的 .ugal）。
 // 当前工作目录本身已经是 ugal 源码目录时不做任何写入，避免在源码树里
-// 再生成一层 .ugal/src。written 表示本次是否真的写入了源码。
-func Bootstrap() (dir string, written bool, err error) {
-	dir, err = DefaultSourceDir()
-	if err != nil {
-		return "", false, err
+// 再生成一份源码。written 表示本次是否真的写入了源码。
+func Bootstrap(dataDir string) (dir string, written bool, err error) {
+	if strings.TrimSpace(dataDir) != "" {
+		st, err := store.Open(dataDir)
+		if err != nil {
+			return "", false, err
+		}
+		dir = st.SrcDir()
+	} else {
+		dir, err = DefaultSourceDir()
+		if err != nil {
+			return "", false, err
+		}
 	}
 	cwd, err := os.Getwd()
 	if err != nil {

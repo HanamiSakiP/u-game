@@ -118,8 +118,9 @@ func Remove(data *model.FavoritesData, ids []int) int {
 	return removed
 }
 
-// Parse 支持 ugal 导出格式、{"games":[...]}、对象数组、appid 数组，
-// 以及每行 "appid" / "appid,名称" / "appid<TAB>名称" 的文本格式。
+// Parse 支持 ugal 导出格式、{"games":[...]}、{"patches":[...]}（即
+// patches.json）、对象数组、appid 数组，以及每行 "appid" / "appid,名称" /
+// "appid<TAB>名称" 的文本格式。
 func Parse(raw []byte) (*model.FavoritesData, error) {
 	raw = bytes.TrimSpace(bytes.TrimPrefix(raw, []byte{0xEF, 0xBB, 0xBF}))
 	if len(raw) == 0 {
@@ -157,6 +158,18 @@ func parseObject(raw []byte) ([]model.Favorite, error) {
 		if v, ok := obj[key]; ok {
 			return parseAnyItems(v)
 		}
+	}
+	// patches.json 也可以直接导入收藏：取其中出现过的 appid。
+	// 补丁名称（name）不是游戏名称，这里忽略，由调用方按 appid 解析。
+	if v, ok := obj["patches"]; ok {
+		games, err := parseAnyItems(v)
+		if err != nil {
+			return nil, err
+		}
+		for i := range games {
+			games[i].Name = ""
+		}
+		return games, nil
 	}
 	if _, ok := obj["appid"]; ok {
 		g, ok, err := decodeItem(raw)

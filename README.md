@@ -10,9 +10,11 @@
 3. 对比两者，列出「已拥有未安装」「本地已安装但未同步」的游戏；
 4. 检测并记录当前系统环境（发行版、内核、桌面、会话等）；
 5. 为本地已安装游戏获取封面，优先复制 Steam 本地缓存，缺失时从 Steam CDN 下载；
-6. 维护本地游戏收藏夹，支持 JSON / appid 列表导入与导出；
-7. 记录游戏补丁状态（补丁名称、哈希、是否已打补丁），没有记录时显示「无补丁」；
-8. 自我更新：源码内嵌在二进制中，任意命令自动写入 `./.ugal/src`；`ugal update` 同步远程更新并在本机重新构建。
+6. 维护本地游戏收藏夹，支持 JSON / appid 列表导入与导出，并可从 `patches.json` 一键导入；
+7. 记录游戏补丁状态（补丁名称、SHA-256/MD5 哈希、是否已打补丁），同一个 appid 可以记录多个补丁文件，没有记录时显示「无补丁」；`patches.json` 会在任意命令首次运行时按内置默认记录自动创建并可直接编辑；支持从本地 `patches/` 目录校验补丁文件是否存在、哈希是否正确；列表会按 appid 自动解析游戏名称；
+8. 自我更新：源码内嵌在二进制中，任意命令自动写入数据目录下的 `src/`（默认 `~/.ugal/src`）；`ugal update` 同步远程更新并在本机重新构建。
+9. Cookie 管理：`ugal cookie get` 用 Firefox 获取 SteamDB Cookie，支持查看、定位和清除。
+10. 命令补全：`ugal completion` 自动检测当前 shell 并写入标准补全位置，也可显式指定 bash/zsh/fish/powershell。
 
 数据默认保存在 `~/.ugal`；如果当前目录下的 `.ugal` 是数据目录（空目录，或含有
 `config.json`、`owned.json` 等数据文件），则优先使用它（方便把数据放在项目里）。
@@ -40,11 +42,11 @@ go install ./cmd/ugal
 安装后可以随时同步源码并重新构建：
 
 ```bash
-ugal update          # 同步当前目录 .ugal/src 并覆盖当前可执行文件
+ugal update          # 同步数据目录下的 src（默认 ~/.ugal/src）并覆盖当前可执行文件
 ugal update --check  # 只检查是否有新版本
 ```
 
-运行任意 `ugal` 命令时，如果当前目录的 `.ugal/src` 还不存在，会自动把二进制
+运行任意 `ugal` 命令时，如果数据目录下的 `src/` 还不存在，会自动把二进制
 内嵌的源码写入该目录。
 
 ## 使用
@@ -52,6 +54,18 @@ ugal update --check  # 只检查是否有新版本
 ```bash
 # 1. 从 SteamDB 抓取已拥有游戏
 ugal sync 76561198000000000
+
+# 如果 SteamDB 要求 Cloudflare 验证，可以用 Firefox 手动通过验证
+ugal sync 76561198000000000 --browser
+
+# SteamDB / 官方 API 来源会自动把 AccountID（32 位账号 ID）、SteamID2/3
+# 或资料 URL 转换为 SteamID64
+ugal sync 22202
+ugal sync "STEAM_1:0:11101"
+
+# 指定 Steam 社区来源时按原样使用标识，不再转换为 SteamID64
+ugal sync "https://steamcommunity.com/id/自定义昵称" --source community
+ugal sync 22202 --source community   # 按自定义昵称 /id/22202 访问
 
 # 2. 扫描本地 Steam 库（自动探测常见安装位置）
 ugal scan
@@ -85,20 +99,41 @@ ugal fav add 440 --name "Team Fortress 2" --note "常玩"
 ugal fav export fav.json  # 导出 JSON
 ugal fav import fav.json  # 导入 JSON（合并）
 ugal fav import fav.json --replace  # 用导入内容替换
+ugal fav import           # 从 patches.json 一键导入（合并）
 
 # 7. 补丁记录
 ugal patch                        # 查看已有补丁记录
 ugal patch list --all             # 查看已知游戏及补丁状态（默认「无补丁」）
 ugal patch set 440 --name "HD Patch" --file patch.xp3 --applied
+ugal patch set 440 --file patch2.xp3 --applied  # 同一 appid 记录第二个补丁文件
+ugal patch set 440 --file a.xp3 --file b.xp3    # 一次记录多个补丁文件
 ugal patch set 440 --hash <sha256> --not-applied
-ugal patch remove 440             # 删除记录（恢复为「无补丁」）
-ugal patch hash patch.xp3         # 只计算 SHA-256
+ugal patch remove 440             # 删除该 appid 的全部记录（恢复为「无补丁」）
+ugal patch remove 440 --name patch.xp3  # 只删除一个补丁文件
+ugal patch hash patch.xp3         # 只计算 MD5（默认）
+ugal patch hash patch.xp3 --sha256 # 只计算 SHA-256
+ugal patch md5 patch.xp3          # MD5 简写
+ugal patch sha256 patch.xp3       # SHA-256 简写
+ugal patch check                  # 校验 ~/.ugal/patches 中文件是否存在、哈希是否正确
+ugal patch check --dir ~/补丁     # 校验指定目录
 
 # 8. 自我更新：同步源码到本地目录并重新构建
 ugal update                       # 同步 + 本地构建，覆盖当前可执行文件
 ugal update --check               # 只检查是否有新版本
 ugal update --no-build            # 只同步源码
 ugal update --build-only          # 不联网，用已有源码重新构建
+
+# 9. SteamDB Cookie
+ugal cookie                       # 查看 Cookie 状态和文件位置
+ugal cookie get                   # 用 Firefox 完成验证并保存 Cookie
+ugal cookie get --print           # 获取后输出 Cookie 内容
+ugal cookie show                  # 显示已保存的 Cookie
+ugal cookie clear                 # 删除已保存的 Cookie
+
+# 10. 命令补全
+ugal completion                   # 自动检测当前 shell 并写入补全脚本
+ugal completion bash              # 显式指定 bash（zsh/fish/powershell 同理）
+ugal completion --print           # 只输出补全脚本，不写入文件
 ```
 
 常用参数：
@@ -110,8 +145,16 @@ list --paths                显示完整安装路径
 list --limit 50             限制显示行数
 scan --include-partial      保留未完整安装的条目
 sync --source steamdb       强制来源（auto/steamdb/community/api）
+sync --source community     使用 Steam 社区，标识按原样使用（不转换 SteamID64）
 sync --cookie-file FILE     使用浏览器导出的 SteamDB Cookie
+sync --browser              打开 Firefox 完成 Cloudflare 验证后同步
+sync --browser-timeout 3m   浏览器验证最长等待时间
 sync --timeout 60s          网络超时
+cookie get                  用 Firefox 获取并保存 Cookie
+cookie show                 显示已保存的 Cookie
+completion                  自动检测 shell 并写入补全脚本
+completion bash             显式写入 bash 补全脚本
+completion --print          只输出补全脚本
 
 cover --style auto          封面样式（auto/portrait/header/logo）
 cover --source auto         封面来源（auto/local/cdn）
@@ -122,21 +165,31 @@ cover --retry 2             失败后的重试次数（0 表示不重试）
 
 fav list --installed        只看已安装的收藏
 fav list --missing          只看未安装的收藏
+fav list --offline          不联网获取发行商
 fav list --json             机器可读输出
 fav remove 440              删除收藏
 fav remove --all            清空收藏夹
 
 patch list --all            包含没有补丁记录的已知游戏
 patch list --json           机器可读输出
-patch set --file FILE       计算并记录文件 SHA-256
-patch set --applied         标记为已打补丁
-patch set --not-applied     标记为未打补丁
+patch list --offline        不联网获取缺失的游戏名称
+patch set --file FILE       计算并记录文件 MD5（默认），可重复指定
+patch set --file FILE --sha256 计算并记录文件 SHA-256
+patch set --name NAME       指定补丁名称（默认使用文件名）
+patch hash FILE             只计算文件 MD5
+patch hash FILE --sha256    只计算文件 SHA-256
+patch check                 检查 <数据目录>/patches 中补丁文件是否存在、哈希是否正确
+patch check --dir DIR       检查指定目录
+patch check --json          机器可读输出
+patch set --applied         标记该 appid 的全部补丁为已打补丁
+patch set --not-applied     标记该 appid 的全部补丁为未打补丁
+patch remove --name NAME    只删除指定名称的补丁记录
 
 update --check              只检查是否有更新
 update --no-build           只同步源码，不构建
 update --build-only         用已有源码重新构建（不联网）
 update --method git|archive 指定同步方式
-update --src-dir DIR        源码目录（默认 <当前目录>/.ugal/src）
+update --src-dir DIR        源码目录（默认 <数据目录>/src）
 update --repo OWNER/NAME    源码仓库
 update --branch NAME        同步分支
 update --install PATH       安装到指定路径
@@ -146,12 +199,35 @@ update --force              git 丢弃本地改动 / 强制重新下载
 ## SteamDB 与 Cloudflare
 
 SteamDB 使用 Cloudflare 校验，服务器 / 数据中心网络可能直接收到验证页。
-此时 `ugal sync` 会自动回退到：
+此时可以先让 ugal 打开 Firefox 完成验证：
+
+```bash
+ugal sync 76561198000000000 --browser
+```
+
+ugal 会使用一个独立的临时 Firefox 配置打开计算器页面。你在窗口中完成
+Cloudflare 验证后，它会自动读取验证后的页面和 Cookie 继续同步，并把 Cookie
+保存到 `~/.ugal/cookie.txt`，之后普通的 `ugal sync` 也会优先复用。默认最长
+等待 3 分钟，可以用 `--browser-timeout` 调整。需要本机安装 Firefox；也可以用
+环境变量 `UGAL_FIREFOX` 指定可执行文件。临时配置会注入一个只用于隐藏
+`navigator.webdriver` 的辅助脚本，避免 Cloudflare 验证反复提示「重试」；
+如果仍然循环，可以改用下面的 Cookie 方式。
+
+只想单独准备 Cookie 时，可以运行：
+
+```bash
+ugal cookie get          # 用 Firefox 验证并保存到 ~/.ugal/cookie.txt
+ugal cookie get --print  # 同时输出 Cookie 内容
+ugal cookie              # 查看状态和文件位置
+ugal cookie clear        # 删除已保存的 Cookie
+```
+
+如果不使用 `--browser`，`ugal sync` 在 SteamDB 失败后会自动回退到：
 
 1. Steam 社区公开游戏列表（`steamcommunity.com/.../games?tab=all&xml=1`）；
 2. Steam 官方 Web API（需要环境变量 `STEAM_API_KEY`）。
 
-如果希望坚持使用 SteamDB，可以在浏览器通过验证后导出 Cookie，放到：
+如果希望坚持使用 SteamDB，也可以在浏览器通过验证后导出 Cookie，放到：
 
 ```text
 ~/.ugal/cookie.txt
@@ -183,7 +259,7 @@ ugal sync 76561198000000000 \
 
 ```bash
 ugal config                                  # 查看配置与文件位置
-ugal config steamid 76561198000000000        # 记住 SteamID
+ugal config steamid 76561198000000000        # 记住 SteamID（原样保存，抓取时按来源转换）
 ugal config steam-dir "D:\SteamLibrary"      # 记住 Steam 根目录
 ugal config source auto                      # auto/steamdb/community/api
 ugal config update-dir ~/ugal-src            # 自我更新的源码目录
@@ -236,7 +312,22 @@ ugal config branch main                      # 自我更新的分支
 
 ## 本地收藏夹
 
-收藏夹保存在 `favorites.json`，可按 appid 添加、删除、筛选，并支持导入导出：
+收藏夹保存在 `favorites.json`，可按 appid 添加、删除、筛选，并支持导入导出。
+`fav list` 优先按备注分组排序；没有备注的收藏会联网获取发行商并按发行商分组，
+两者都没有时归入「无分组」。表格中显示备注/发行商而不是添加时间。有备注的收藏
+仍然按备注分组，备注不会被发行商覆盖。多发行商组合按以下规则归并：
+
+| 原始组合 | 分组 |
+| --- | --- |
+| `HIKARI FIELD / NekoNyan Ltd.` | `HIKARI FIELD` |
+| `NekoNyan Ltd. / HIKARI FIELD` | `HIKARI FIELD` |
+| `TamaMako gaming / Sekai Project` | `Sekai Project` |
+| `Sekai Project / TamaMako gaming` | `Sekai Project` |
+| `Kagura Games / NekoNyan Ltd.` | `NekoNyan Ltd.` |
+| `NekoNyan Ltd. / Kagura Games` | `NekoNyan Ltd.` |
+
+未列出的组合保持原样。每组前会用红色显示组名和该组数量（例如
+`Valve（2 个）`）：
 
 ```bash
 ugal fav add 440 220
@@ -244,6 +335,9 @@ ugal fav list --json
 ugal fav export favorites.json
 ugal fav import favorites.json          # 与现有收藏合并
 ugal fav import favorites.json --replace # 替换现有收藏
+ugal fav import                         # 从 patches.json 一键导入（合并）
+ugal fav import --replace               # 用 patches.json 内容替换收藏
+ugal fav import-patches                 # 等同 fav import --patches
 ugal fav remove 220
 ugal fav clear
 ```
@@ -252,35 +346,123 @@ ugal fav clear
 
 - `ugal fav export` 生成的 JSON；
 - `{"games":[{"appid":440,"name":"Team Fortress 2"}]}`；
+- `patches.json`（`{"patches":[{"appid":440,...}]}`）：按 appid 导入，
+  补丁名称不会被当成游戏名称，游戏名称会按已有数据自动解析；
 - `[440, 220]` 或 `["440", "220"]`；
 - `{"440":"Team Fortress 2","220":"Half-Life 2"}`；
 - 每行一个 appid，或 `appid,名称` / `appid<TAB>名称` 的文本。
+
+`patches.json` 会在任意命令首次运行时按内置默认内容自动创建。你可以手工往里
+补充 appid 和补丁记录，然后运行 `ugal fav import`，把其中出现过的游戏一次性
+加入收藏夹。
 
 导出内容包含 `version`、`updated_at`、`count` 和 `games`，可以直接备份或迁移到
 另一台机器。
 
 ## 补丁记录
 
-补丁状态保存在 `patches.json`，每个 appid 最多一条记录：
+补丁状态保存在 `patches.json`。同一个 appid 可以对应多条补丁记录，
+用补丁名称（`name`）区分；名称相同则视为同一个补丁文件的更新。
+没有记录时显示「无补丁」。
+
+`patches.json` 是默认的补丁输入文件：任意命令首次运行时，如果它不存在会
+按内置默认模板自动创建（默认模板为 `internal/store/default_patches.json`），
+可以直接手工编辑；`patches.json` 已存在时不会被覆盖。编辑后运行
+`ugal fav import`，即可把其中出现过的游戏一键加入收藏夹。
 
 | 情况 | 状态 |
 | --- | --- |
 | 没有记录 | `无补丁`（默认） |
-| 有记录，`applied = false` | `未打补丁` |
-| 有记录，`applied = true` | `已打补丁` |
+| 全部记录 `applied = false` | `未打补丁` |
+| 全部记录 `applied = true` | `已打补丁` |
+| 部分记录已打补丁 | `部分已打` |
 
 ```bash
 ugal patch set 440 --name "HD Patch" --file patch.xp3 --applied
+ugal patch set 440 --file patch2.xp3 --applied   # 再记录一个补丁文件
+ugal patch set 440 --file a.xp3 --file b.xp3     # 一次记录多个补丁文件
 ugal patch set 440 --hash sha256:abcd... --not-applied
-ugal patch list              # 只列出有记录的补丁
+ugal patch list              # 只列出有记录的补丁，同一 appid 可出现多次（补丁多的排前面）
 ugal patch list --all        # 已知游戏全部列出，无记录显示「无补丁」
 ugal patch list --json       # total / applied / unpatched / no_patch
-ugal patch remove 440        # 删除单条记录
+ugal patch list --offline    # 不联网，只用本地名称和 appnames.json 缓存
+ugal patch remove 440        # 删除该 appid 的全部补丁记录
+ugal patch remove 440 --name patch.xp3  # 只删除一个补丁文件
 ugal patch remove --all      # 清空所有记录
-ugal patch hash patch.xp3    # 仅计算 SHA-256，不写记录
+ugal patch hash patch.xp3    # 仅计算 MD5（默认），不写记录
+ugal patch hash patch.xp3 --sha256  # 仅计算 SHA-256，不写记录
+ugal patch md5 patch.xp3     # MD5 简写
+ugal patch sha256 patch.xp3  # SHA-256 简写
+ugal patch set 440 --file patch.xp3 --sha256  # 用 SHA-256 记录补丁
 ```
 
-`list` 和 `fav list` 的表格中也会显示补丁状态。记录包含：
+### 校验本地补丁文件
+
+把补丁文件放进 `~/.ugal/patches/`（也可以按 appid 或任意子目录分类），
+`patch check` 会递归查找并校验。目录不存在时会自动创建：
+
+```bash
+ugal patch check              # 校验默认目录 <数据目录>/patches
+ugal patch check --dir ~/补丁 # 校验指定目录
+ugal patch check 440          # 只校验指定 appid
+ugal patch check --all        # 同时显示未找到的补丁明细
+ugal patch check --json       # 机器可读输出
+ugal patch check --offline    # 输出游戏名时不联网
+```
+
+默认文本输出只展开「已找到」的补丁，表格列为 `APPID`、`状态`、`游戏`、
+`补丁名称`、`哈希`；哈希列只显示「符合」或「不符合」，未找到的补丁汇总成
+一行。校验期间会在终端显示进度。需要查看未找到的明细时加 `--all`。
+`--json` 始终包含全部记录。
+
+匹配和校验规则：
+
+- 按补丁记录中的 `name` 与文件名匹配，不区分大小写，支持子目录；
+- 同一文件名存在多个副本时，只要任意一个哈希与记录一致就算通过；
+- 哈希长度 32 位按 MD5 校验，64 位按 SHA-256 校验；
+- 记录没有名称、哈希长度不支持或文件无法读取时显示「无法校验」。
+
+| 状态 | 含义 |
+| --- | --- |
+| `已找到`（`ok`） | 文件存在且哈希正确 |
+| `未找到`（`missing`） | 目录中找不到对应文件 |
+| `哈希错误`（`mismatch`） | 文件存在，但哈希与记录不一致 |
+| `无法校验`（`unverified`） | 缺少名称/哈希，或文件无法读取 |
+
+`--json` 输出包含 `directory`、`total`、`ok`、`missing`、`mismatch`、
+`unverified` 和逐条 `patches`（含 `path`、`expected_hash`、`actual_hash`）。
+
+`list` 和 `fav list` 的表格中也会显示补丁状态；这两个命令的 JSON 输出中，
+每款游戏同时包含 `patch`（第一条记录，兼容旧格式）和 `patches`（全部记录）。
+`patch list --json` 则按补丁记录逐条输出，同一 appid 可能出现多次。
+表格按 appid 下的补丁数量从多到少排序，包含多个补丁文件的游戏优先显示，
+数量相同时保持 appid 升序；`--all` 模式下「无补丁」的游戏排在最后。
+
+`ugal patch list` 会在表格末尾显示补丁总数和状态统计。在终端中，「未打补丁」
+以及未找到名称的游戏（显示为 `App <appid>`）会以红色显示；输出被重定向、
+设置 `NO_COLOR` 或 `TERM=dumb` 时自动使用纯文本。
+
+补丁列表的「游戏」列会按以下优先级解析 appid 对应的名称：
+
+1. `installed.json` / `owned.json` / `favorites.json` 中已有的名称；
+2. Steam 本地 `appcache/appinfo.vdf`（离线读取，通常已包含账号接触过的游戏）；
+3. `appnames.json` 缓存；
+4. 仍然缺失时，按需请求 Steam 官方 `ISteamApps/GetAppList`，成功后写入
+   `appnames.json`，后续离线也能显示。
+
+不想联网时加 `--offline`（或设置环境变量 `UGAL_OFFLINE=1`）。联网失败只会
+保留 `App <appid>` 占位名，不会影响命令本身；也可以直接编辑
+`appnames.json` 手动补充名称，例如：
+
+```json
+{
+  "version": 1,
+  "count": 1,
+  "names": { "575480": "ChronoClock" }
+}
+```
+
+`patches.json` 中的 `patches` 是记录数组，同一 appid 可以有多项：
 
 ```json
 {
@@ -293,8 +475,12 @@ ugal patch hash patch.xp3    # 仅计算 SHA-256，不写记录
 ```
 
 `--hash` 支持带 `sha256:` / `md5:` 等前缀，写入时会统一转为小写；
-`--file` 会读取文件计算 SHA-256，未指定 `--name` 时用文件名作为补丁名称。
-只更新 `--applied` / `--not-applied` 时，已有的名称和哈希会保留。
+`--file` 会读取文件计算 MD5（默认），加上 `--sha256` 则改为计算 SHA-256，
+未指定 `--name` 时用文件名作为补丁名称。重复记录同名文件会更新原记录，
+不同名称会新增记录；`--file` 可以重复指定多个文件。
+当同一 appid 已有多条记录时，只给 `--hash` 无法确定更新哪一条，需要用
+`--name` 指定补丁名称。只更新 `--applied` / `--not-applied` 且未指定
+`--name` 时，会作用于该 appid 的全部补丁记录。
 
 ## 数据文件
 
@@ -305,14 +491,17 @@ ugal patch hash patch.xp3    # 仅计算 SHA-256，不写记录
 ├── installed.json   # 本地库目录 + appmanifest 解析结果
 ├── system.json      # 当前系统环境
 ├── favorites.json   # 本地游戏收藏夹
-├── patches.json     # 补丁记录（名称、哈希、是否已打补丁）
+├── patches.json     # 补丁记录（默认输入文件，任意命令首次运行时自动创建）
+├── patches/         # 本地补丁文件（patch check 校验存在性与哈希）
+├── appnames.json    # appid → 游戏名称缓存
+├── publishers.json  # appid → 发行商缓存
 ├── update.json      # 最近一次源码同步与本地构建记录
+├── src/             # 自我更新源码（默认源码目录）
 ├── covers/          # 游戏封面 <appid>.jpg / .png / .webp
-└── cookie.txt       # 可选，SteamDB Cookie
+└── cookie.txt       # 可选，SteamDB Cookie（--browser 验证后会写入）
 ```
 
-`ugal update` 的源码默认放在当前目录的 `.ugal/src`，不一定在数据目录里；
-如果两者是同一个 `.ugal`，源码也在该目录下的 `src/`。
+`ugal update` 的源码默认放在数据目录的 `src/`（默认 `~/.ugal/src`）。
 
 `installed.json` 中每个库目录包含：
 
@@ -351,10 +540,10 @@ ugal patch hash patch.xp3    # 仅计算 SHA-256，不写记录
 ## 自我更新
 
 ugal 的源码在构建时通过 `go:embed` 内嵌进二进制。运行**任意** `ugal` 命令时，
-如果当前目录的 `.ugal/src` 还不存在，会自动写入一份源码；已存在则跳过，不覆盖
+如果数据目录下的 `src/` 还不存在，会自动写入一份源码；已存在则跳过，不覆盖
 本地修改。当前目录本身已经是 ugal 源码树时不会重复释放。
 
-因此即使离线，也能随时查看 `./.ugal/src` 里的源码，并用 `--build-only` 构建：
+因此即使离线，也能随时查看 `~/.ugal/src` 里的源码，并用 `--build-only` 构建：
 
 ```bash
 ugal update                  # 同步源码 + 本地构建 + 安装
@@ -363,14 +552,14 @@ ugal update --no-build       # 只同步源码
 ugal update --build-only     # 不联网，直接用已有源码重新构建
 ```
 
-默认源码目录是**当前工作目录**下的 `.ugal/src`（例如在 `~/project` 运行就是
-`~/project/.ugal/src`）。`ugal update` 同步远程源码时：
+默认源码目录是**数据目录**下的 `src/`（默认 `~/.ugal/src`；使用 `--data-dir`
+时就是该数据目录下的 `src/`）。`ugal update` 同步远程源码时：
 
 1. 源码目录是 git 仓库：用 `git fetch` 增量更新；
 2. 源码目录不是 git 仓库（包括自动释放的内嵌源码）：下载 GitHub 源码包
    （`tar.gz`）并替换源码目录。
 
-> 源码包方式会整体替换 `.ugal/src`，里面的本地改动不会保留；
+> 源码包方式会整体替换数据目录下的 `src/`，里面的本地改动不会保留；
 > 需要保留改动时先备份，或直接用 `ugal update --build-only` 本地构建。
 
 构建命令等价于：
@@ -419,6 +608,48 @@ GITHUB_TOKEN=ghp_xxx ugal update
 
 Windows 上正在运行的 `ugal.exe` 通常无法直接覆盖。此时新版本会保存为
 `ugal.exe.new`，关闭 ugal 后手动替换即可。
+
+## 命令补全
+
+`ugal completion [shell]` 会自动检测当前 shell（依次参考 `UGAL_SHELL`、父进程名、
+`$SHELL`、`PSModulePath`），并把补全脚本写入该 shell 的标准位置；支持 `bash`、
+`zsh`、`fish` 和 `powershell`。检测不到时会提示显式指定。
+
+```bash
+ugal completion                  # 自动检测并写入
+ugal completion zsh              # 显式指定并写入
+UGAL_SHELL=fish ugal completion  # 临时覆盖检测结果
+ugal completion --print          # 只输出到终端，不写文件
+ugal completion --dir DIR        # 写入指定目录（便于测试或自定义布局）
+```
+
+默认写入位置：
+
+| Shell | 路径 |
+| --- | --- |
+| Bash | `$XDG_DATA_HOME/bash-completion/completions/ugal`（默认 `~/.local/share/...`） |
+| Zsh | `${ZDOTDIR:-~}/.zsh/completions/_ugal` |
+| Fish | `$XDG_CONFIG_HOME/fish/completions/ugal.fish`（默认 `~/.config/...`） |
+| PowerShell | `$PROFILE`（用 `# >>> ugal completion >>>` 标记块追加，重复运行不会叠加） |
+
+Bash / Fish 写入后新开终端即可生效；当前终端也可以立即启用：
+
+```bash
+source ~/.local/share/bash-completion/completions/ugal
+source ~/.config/fish/completions/ugal.fish
+```
+
+Zsh 还需要让 fpath 包含补全目录，在 `~/.zshrc` 中加入：
+
+```zsh
+fpath=(~/.zsh/completions $fpath)
+autoload -Uz compinit && compinit
+```
+
+PowerShell 重新打开窗口，或运行 `. $PROFILE` 生效。也可以随时用
+`ugal completion --print` 把脚本输出到终端自行处理。
+
+补全会提示子命令、常用参数，以及 `--source`、`--type`、`--method` 等选项的取值。
 
 ## 版本
 

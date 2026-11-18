@@ -50,6 +50,25 @@ func TestParseInvalid(t *testing.T) {
 	}
 }
 
+func TestParsePatchesFile(t *testing.T) {
+	raw := `{"version":1,"count":2,"patches":[
+		{"appid":440,"name":"HD Patch","applied":true},
+		{"appid":220,"name":"patch.xp3","applied":false}
+	]}`
+	data, err := Parse([]byte(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if data.Count != 2 || data.Games[0].AppID != 220 || data.Games[1].AppID != 440 {
+		t.Fatalf("games = %#v", data.Games)
+	}
+	for _, g := range data.Games {
+		if g.Name != "" {
+			t.Fatalf("patch name should not become game name: %#v", g)
+		}
+	}
+}
+
 func TestAddRemoveAndNormalize(t *testing.T) {
 	addedAt := time.Now().UTC().Add(-time.Hour)
 	data := &model.FavoritesData{Games: []model.Favorite{

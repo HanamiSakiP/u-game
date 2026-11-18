@@ -7,11 +7,14 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
+	"github.com/HanamiSakiP/u-game/internal/browser"
 	"github.com/HanamiSakiP/u-game/internal/model"
 	"github.com/HanamiSakiP/u-game/internal/remote"
 	"github.com/HanamiSakiP/u-game/internal/steam"
@@ -30,14 +33,15 @@ type app struct {
 }
 
 type entry struct {
-	AppID   int          `json:"appid"`
-	Name    string       `json:"name"`
-	Status  string       `json:"status"`
-	Type    string       `json:"type,omitempty"`
-	Library string       `json:"library,omitempty"`
-	Dir     string       `json:"dir,omitempty"`
-	Size    int64        `json:"size,omitempty"`
-	Patch   *model.Patch `json:"patch,omitempty"`
+	AppID   int           `json:"appid"`
+	Name    string        `json:"name"`
+	Status  string        `json:"status"`
+	Type    string        `json:"type,omitempty"`
+	Library string        `json:"library,omitempty"`
+	Dir     string        `json:"dir,omitempty"`
+	Size    int64         `json:"size,omitempty"`
+	Patch   *model.Patch  `json:"patch,omitempty"`
+	Patches []model.Patch `json:"patches,omitempty"`
 }
 
 // Run 执行 ugal 命令。
@@ -57,6 +61,8 @@ func Run(args []string, stdout, stderr io.Writer) error {
 	case "version", "-v", "--version":
 		fmt.Fprintf(stdout, "ugal %s\n", version)
 		return nil
+	case "completion":
+		return runCompletion(rest[1:], stdout, stderr)
 	}
 
 	st, err := store.Open(dataDir)
@@ -68,6 +74,15 @@ func Run(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	a := &app{store: st, cfg: cfg, out: stdout, err: stderr}
+
+	// patches.json 作为默认的补丁输入文件：任意命令首次运行时自动创建，
+	// 用户可以直接编辑它，再用 `ugal fav import` 一键导入收藏。
+	if written, err := st.EnsurePatchesFile(); err != nil {
+		fmt.Fprintf(a.err, "警告: 创建补丁记录文件失败: %v\n", err)
+	} else if written {
+		fmt.Fprintf(a.err, "已创建补丁记录文件 %s（内置默认记录，可手工编辑，运行 `ugal fav import` 一键导入收藏）\n",
+			st.PatchesPath())
+	}
 
 	switch rest[0] {
 	case "sync":
@@ -94,9 +109,17 @@ func Run(args []string, stdout, stderr io.Writer) error {
 		return a.cmdUpdate(rest[1:])
 	case "config":
 		return a.cmdConfig(rest[1:])
+	case "cookie", "cookies":
+		return a.cmdCookie(rest[1:])
 	default:
 		return fmt.Errorf("未知命令 %q，运行 `ugal help` 查看帮助", rest[0])
 	}
+}
+
+// DataDir 从命令行参数中解析 --data-dir / -d，供启动阶段释放内嵌源码使用。
+func DataDir(args []string) (string, error) {
+	dir, _, err := extractDataDir(args)
+	return dir, err
 }
 
 func extractDataDir(args []string) (string, []string, error) {
@@ -166,6 +189,8 @@ func (a *app) cmdSync(args []string) error {
 	cookie := fs.String("cookie", "", "SteamDB Cookie 请求头内容")
 	cookieFile := fs.String("cookie-file", "", "包含 Cookie 的文件（支持 Netscape cookies.txt）")
 	userAgent := fs.String("user-agent", "", "请求 User-Agent（使用 SteamDB Cookie 时建议与浏览器一致）")
+	useBrowser := fs.Bool("browser", false, "用本机 Firefox 完成 SteamDB 的 Cloudflare 验证")
+	browserTimeout := fs.Duration("browser-timeout", browser.DefaultTimeout, "浏览器验证最长等待时间")
 	timeout := fs.Duration("timeout", 30*time.Second, "网络超时")
 	fs.Usage = func() {
 		fmt.Fprintln(a.err, "用法: ugal sync [steamid] [参数]")
@@ -191,6 +216,19 @@ func (a *app) cmdSync(args []string) error {
 	if *timeout <= 0 {
 		*timeout = 30 * time.Second
 	}
+	src := strings.TrimSpace(*source)
+	if src == "" {
+		src = a.cfg.Source
+	}
+	if src == "" {
+		src = "auto"
+	}
+	// 社区来源按原样使用标识，不做 SteamID64 转换。
+	if !strings.EqualFold(src, "community") {
+		if canonical := remote.CanonicalSteamID(steamID); canonical != remote.NormalizeSteamID(steamID) {
+			fmt.Fprintf(a.err, "已转换为 SteamID64: %s\n", canonical)
+		}
+	}
 
 	rawCookie := strings.TrimSpace(*cookie)
 	if *cookieFile != "" {
@@ -207,14 +245,6 @@ func (a *app) cmdSync(args []string) error {
 		rawCookie = a.store.LoadCookie()
 	}
 
-	src := strings.TrimSpace(*source)
-	if src == "" {
-		src = a.cfg.Source
-	}
-	if src == "" {
-		src = "auto"
-	}
-
 	apiKey := strings.TrimSpace(os.Getenv("STEAM_API_KEY"))
 	if apiKey == "" {
 		apiKey = strings.TrimSpace(os.Getenv("UGAL_STEAM_API_KEY"))
@@ -225,17 +255,28 @@ func (a *app) cmdSync(args []string) error {
 		ua = strings.TrimSpace(a.cfg.UserAgent)
 	}
 
-	data, err := remote.Fetch(context.Background(), remote.Options{
-		SteamID:   steamID,
-		Source:    src,
-		Cookie:    rawCookie,
-		UserAgent: ua,
-		Timeout:   *timeout,
-		APIKey:    apiKey,
-		Logf: func(format string, args ...interface{}) {
-			fmt.Fprintf(a.err, format+"\n", args...)
-		},
-	})
+	var data *model.OwnedData
+	var err error
+	if *useBrowser {
+		switch src {
+		case "", "auto", "steamdb":
+		default:
+			return fmt.Errorf("--browser 只适用于 SteamDB 来源，当前来源是 %s", src)
+		}
+		data, err = a.fetchViaBrowser(steamID, *timeout, *browserTimeout)
+	} else {
+		data, err = remote.Fetch(context.Background(), remote.Options{
+			SteamID:   steamID,
+			Source:    src,
+			Cookie:    rawCookie,
+			UserAgent: ua,
+			Timeout:   *timeout,
+			APIKey:    apiKey,
+			Logf: func(format string, args ...interface{}) {
+				fmt.Fprintf(a.err, format+"\n", args...)
+			},
+		})
+	}
 	if err != nil {
 		return err
 	}
@@ -266,6 +307,96 @@ func (a *app) cmdSync(args []string) error {
 			}
 		}
 		fmt.Fprintf(a.out, "本地已安装: %d 个，未安装: %d 个\n", have, data.Count-have)
+	}
+	return nil
+}
+
+// fetchViaBrowser 打开 Firefox 完成 SteamDB 的 Cloudflare 验证，并把验证后的
+// 页面解析为已拥有游戏。验证通过的 Cookie 会写入数据目录，供后续 sync 复用。
+func (a *app) fetchViaBrowser(steamID string, netTimeout, browserTimeout time.Duration) (*model.OwnedData, error) {
+	id := remote.CanonicalSteamID(steamID)
+	if id == "" {
+		return nil, errors.New("SteamID 不能为空")
+	}
+	targetURL := remote.SteamDBCalculatorURL(id)
+	fmt.Fprintf(a.err, "浏览器验证: 正在启动 Firefox，请在窗口中打开 %s\n", targetURL)
+
+	logf := func(format string, args ...interface{}) {
+		fmt.Fprintf(a.err, format+"\n", args...)
+	}
+	// Ctrl-C / SIGTERM 时取消验证，确保临时 Firefox 窗口被关闭。
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	res, err := browser.Verify(ctx, targetURL, browser.Options{
+		Timeout: browserTimeout,
+		Logf:    logf,
+	})
+	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			return nil, errors.New("已取消浏览器验证")
+		}
+		return nil, err
+	}
+
+	if err := a.saveBrowserCredentials(res, logf); err != nil {
+		fmt.Fprintf(a.err, "警告: %v\n", err)
+	}
+
+	games, parseErr := remote.ParseSteamDB([]byte(res.HTML))
+	if parseErr == nil && len(games) > 0 {
+		return &model.OwnedData{
+			Version:   model.Version,
+			SteamID:   id,
+			Source:    "browser",
+			FetchedAt: time.Now().UTC(),
+			Count:     len(games),
+			Games:     games,
+		}, nil
+	}
+
+	if strings.TrimSpace(res.Cookies) != "" {
+		logf("提示: 页面解析失败（%v），改用已验证的 Cookie 重新请求 SteamDB", parseErr)
+		data, err := remote.Fetch(context.Background(), remote.Options{
+			SteamID:   id,
+			Source:    "steamdb",
+			Cookie:    res.Cookies,
+			UserAgent: res.UserAgent,
+			Timeout:   netTimeout,
+			Logf:      logf,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("浏览器验证成功，但读取 SteamDB 失败: %w", err)
+		}
+		return data, nil
+	}
+	if parseErr != nil {
+		return nil, fmt.Errorf("解析浏览器中的 SteamDB 页面失败: %w", parseErr)
+	}
+	return nil, errors.New("浏览器验证成功，但页面中没有游戏")
+}
+
+// saveBrowserCredentials 把浏览器验证得到的 Cookie 与 User-Agent 保存到数据目录。
+// Cookie 文件权限为 0600；User-Agent 只在尚未配置时写入。
+func (a *app) saveBrowserCredentials(res *browser.Result, logf func(string, ...interface{})) error {
+	if res == nil {
+		return nil
+	}
+	cookie := strings.TrimSpace(res.Cookies)
+	if cookie == "" {
+		return nil
+	}
+	path := a.store.CookiePath()
+	if err := os.WriteFile(path, []byte(cookie+"\n"), 0o600); err != nil {
+		return fmt.Errorf("保存浏览器 Cookie 到 %s 失败: %w", path, err)
+	}
+	if res.UserAgent != "" && strings.TrimSpace(a.cfg.UserAgent) == "" {
+		a.cfg.UserAgent = res.UserAgent
+		if err := a.store.SaveConfig(a.cfg); err != nil {
+			return fmt.Errorf("保存 User-Agent 失败: %w", err)
+		}
+	}
+	if logf != nil {
+		logf("已保存浏览器 Cookie 到 %s", path)
 	}
 	return nil
 }
@@ -438,6 +569,9 @@ func (a *app) cmdList(args []string, forced string) error {
 	if err != nil {
 		return err
 	}
+	if names, err := a.gameNames(); err == nil {
+		applyGameNames(all, names)
+	}
 	patchData, err := a.loadPatches()
 	if err != nil {
 		return err
@@ -515,7 +649,7 @@ func (a *app) cmdList(args []string, forced string) error {
 			statusLabel(e.Status),
 			typeLabel(e.Type),
 			name,
-			patchStatus(e.Patch),
+			patchStatusAll(e.Patches),
 			humanSize(e.Size),
 			location,
 		})
@@ -639,7 +773,9 @@ func (a *app) cmdConfig(args []string) error {
 	value := strings.TrimSpace(args[1])
 	switch key {
 	case "steamid":
-		a.cfg.SteamID = value
+		// 只提取标识本身，不在这里转换为 SteamID64：community 来源需要保留
+		// 自定义 URL / AccountID 原值，SteamDB 等来源会在抓取时再转换。
+		a.cfg.SteamID = remote.NormalizeSteamID(value)
 	case "steam-dir":
 		a.cfg.SteamDir = strings.Trim(value, `"'`)
 	case "source":
@@ -662,6 +798,9 @@ func (a *app) cmdConfig(args []string) error {
 		a.cfg.Repo = strings.Trim(value, `"'`)
 	case "branch":
 		a.cfg.Branch = strings.Trim(value, `"'`)
+	}
+	if key == "steamid" {
+		value = a.cfg.SteamID
 	}
 	if err := a.store.SaveConfig(a.cfg); err != nil {
 		return err
@@ -686,6 +825,8 @@ func (a *app) printConfig() {
 	fmt.Fprintf(a.out, "系统记录 : %s\n", a.store.SystemPath())
 	fmt.Fprintf(a.out, "收藏夹   : %s\n", a.store.FavoritesPath())
 	fmt.Fprintf(a.out, "补丁记录 : %s\n", a.store.PatchesPath())
+	fmt.Fprintf(a.out, "补丁目录 : %s\n", a.store.PatchesDir())
+	fmt.Fprintf(a.out, "名称缓存 : %s\n", a.store.AppNamesPath())
 	fmt.Fprintf(a.out, "封面目录 : %s\n", a.store.CoversDir())
 	fmt.Fprintf(a.out, "源码目录 : %s\n", orPlaceholder(a.cfg.UpdateDir, a.defaultSrcDir()))
 	fmt.Fprintf(a.out, "源码仓库 : %s\n", orPlaceholder(a.cfg.Repo, "github.com/HanamiSakiP/u-game"))
@@ -716,9 +857,11 @@ func buildEntries(owned *model.OwnedData, installed *model.InstalledData) ([]ent
 	if installed != nil {
 		for _, ap := range installed.Games {
 			old, ok := installedMap[ap.AppID]
-			if !ok || (!old.Installed && ap.Installed) || (ap.Name != "" && old.Name == "") {
+			if !ok {
 				installedMap[ap.AppID] = ap
+				continue
 			}
+			installedMap[ap.AppID] = mergeInstalledApp(old, ap)
 		}
 	}
 
@@ -749,8 +892,14 @@ func buildEntries(owned *model.OwnedData, installed *model.InstalledData) ([]ent
 			ownedSet[g.AppID] = true
 		}
 	}
-	if installed != nil {
-		for _, ap := range installed.Games {
+	if len(installedMap) > 0 {
+		ids := make([]int, 0, len(installedMap))
+		for id := range installedMap {
+			ids = append(ids, id)
+		}
+		sort.Ints(ids)
+		for _, id := range ids {
+			ap := installedMap[id]
 			if !ap.Installed || ownedSet[ap.AppID] {
 				continue
 			}
@@ -778,6 +927,52 @@ func buildEntries(owned *model.OwnedData, installed *model.InstalledData) ([]ent
 		return out[i].AppID < out[j].AppID
 	})
 	return out, nil
+}
+
+// mergeInstalledApp 合并同一个 appid 在多个库目录中的记录，优先保留
+// 有 appmanifest、有名称且已安装的字段，避免同一个 appid 显示成多行。
+func mergeInstalledApp(a, b model.App) model.App {
+	// 有 appmanifest 的记录通常包含名称和安装目录，优先作为合并基础。
+	if a.ManifestMissing && !b.ManifestMissing {
+		a, b = b, a
+	}
+	if !a.Installed && b.Installed {
+		a.Installed = true
+	}
+	if a.Name == "" {
+		a.Name = b.Name
+	}
+	if a.InstallDir == "" {
+		a.InstallDir = b.InstallDir
+	}
+	if a.Dir == "" {
+		a.Dir = b.Dir
+	}
+	if a.Type == "" {
+		a.Type = b.Type
+	}
+	if a.Library == "" {
+		a.Library = b.Library
+	}
+	if a.Size == 0 {
+		a.Size = b.Size
+	}
+	if a.DownloadType == 0 {
+		a.DownloadType = b.DownloadType
+	}
+	if a.StateFlags == 0 {
+		a.StateFlags = b.StateFlags
+	}
+	if a.LastUpdated == 0 {
+		a.LastUpdated = b.LastUpdated
+	}
+	if a.BuildID == "" {
+		a.BuildID = b.BuildID
+	}
+	if !b.ManifestMissing {
+		a.ManifestMissing = false
+	}
+	return a
 }
 
 type summaryJSON struct {
@@ -852,6 +1047,8 @@ func sourceLabel(s string) string {
 	switch s {
 	case "steamdb":
 		return "SteamDB"
+	case "browser":
+		return "SteamDB（浏览器验证）"
 	case "community":
 		return "Steam 社区"
 	case "api":
@@ -896,7 +1093,7 @@ func printHelp(w io.Writer) {
   ugal [--data-dir 目录] <命令> [参数]
 
 命令:
-  sync [steamid]     从 SteamDB 抓取已拥有游戏（失败时自动回退 Steam 社区 / 官方 API）
+  sync [steamid]     从 SteamDB 抓取已拥有游戏（--browser 可用浏览器通过 Cloudflare 验证）
   scan [Steam目录]   扫描本地 Steam 库，记录已安装游戏和存储目录
   list               列出已拥有游戏及本地安装状态（默认）
   missing            只列出已拥有但未安装的游戏
@@ -908,6 +1105,8 @@ func printHelp(w io.Writer) {
   patch <子命令>     游戏补丁记录（哈希、名称、是否已打补丁）
   update             同步源码到本地目录并重新构建（git / 源码包）
   config             查看或修改配置
+  cookie <子命令>    SteamDB Cookie（浏览器获取、查看、定位、清除）
+  completion [shell] 自动检测 shell 并写入补全脚本（--print 只输出）
   version            显示版本
 
 全局参数:
@@ -921,7 +1120,10 @@ func printHelp(w io.Writer) {
   list --paths               显示完整安装路径
   scan --include-partial     保留未完整安装的条目
   sync --source steamdb      强制指定来源
+  sync --source community    使用 Steam 社区（标识按原样使用，不转换 SteamID64）
   sync --cookie-file FILE    使用浏览器导出的 SteamDB Cookie
+  sync --browser             打开 Firefox 完成 Cloudflare 验证后同步
+  sync --browser-timeout 3m  浏览器验证最长等待时间
   cover --list               查看封面获取状态
   cover --force              重新获取已有封面
   cover --retry 2            下载失败后的重试次数
@@ -929,18 +1131,27 @@ func printHelp(w io.Writer) {
   fav add 440                收藏游戏
   fav export fav.json        导出收藏夹
   fav import fav.json        导入收藏夹
+  fav import                 从 patches.json 一键导入收藏
   patch list                 查看补丁记录
   patch list --all           查看已知游戏及补丁状态（默认无补丁）
   patch set 440 --file x.patch --applied
   patch set 440 --hash <哈希> --not-applied
+  patch check                检查本地补丁文件是否存在且哈希正确
   update --check             只检查是否有新版本
   update --no-build          只同步源码，不构建
   update --build-only        用已有源码重新构建（不联网）
-  update --src-dir DIR       指定源码目录（默认 <当前目录>/.ugal/src）
+  update --src-dir DIR       指定源码目录（默认 <数据目录>/src）
   update --install PATH      安装到指定路径
+  cookie get                 用 Firefox 获取并保存 SteamDB Cookie
+  cookie show                显示已保存的 Cookie
+  completion                 自动检测 shell 并写入标准补全位置
+  completion bash            写入 bash 补全（zsh/fish/powershell 同理）
+  completion --print         只输出补全脚本，不写入文件
+  completion --dir DIR       写入指定目录
 
 示例:
   ugal sync 76561198000000000
+  ugal sync 22202            # AccountID 自动转换为 SteamID64
   ugal scan
   ugal scan "D:\SteamLibrary"
   ugal list --missing
@@ -953,18 +1164,25 @@ func printHelp(w io.Writer) {
   ugal fav import favorites.json
   ugal patch list --all
   ugal patch set 440 --file patch.xp3 --applied
+  ugal patch check
   ugal update
   ugal update --check
   ugal update --build-only
+  ugal cookie get
+  ugal completion
   ugal config steamid 76561198000000000
   ugal config steam-dir "D:\SteamLibrary"
 
 数据目录:
   默认 ~/.ugal；当前目录的 .ugal 是数据目录（空目录或含数据文件）时优先使用。
   包含 config.json、owned.json、installed.json、system.json、favorites.json、
-  patches.json、update.json、covers/，以及可选的 cookie.txt（SteamDB Cookie）。
-  update 命令默认把源码放在当前目录的 .ugal/src，并在本机构建；只有 src/ 的
-  .ugal 不会被当作数据目录。运行任意命令时，如果 .ugal/src 不存在，会自动
-  写入二进制内嵌的源码（已有源码不覆盖）。
+  patches.json、update.json、covers/、patches/、src/，以及可选的 cookie.txt
+  （SteamDB Cookie）。patches.json 会在任意命令首次运行时按内置默认记录自动
+  创建，可直接编辑；运行 "ugal fav import" 可从 patches.json 一键导入收藏。patches/ 用于
+  存放本地补丁文件，patch check 会校验其中文件是否存在、哈希是否与
+  patches.json 记录一致。
+  update 命令默认把源码放在数据目录的 src/（默认 ~/.ugal/src），并在本机构建。
+  运行任意命令时，如果数据目录下的 src/ 不存在，会自动写入二进制内嵌的源码
+  （已有源码不覆盖）。
 `)
 }
