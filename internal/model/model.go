@@ -81,6 +81,7 @@ type InstalledData struct {
 	TotalSize      int64     `json:"total_size,omitempty"`
 	Warnings       []string  `json:"warnings,omitempty"`
 	Skipped        []string  `json:"skipped,omitempty"`
+	Hidden         []string  `json:"hidden,omitempty"`
 }
 
 // SystemData 对应 .ugal/system.json，记录 ugal 运行所在系统。

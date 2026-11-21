@@ -48,6 +48,29 @@ func TestFindPrefersJPG(t *testing.T) {
 	}
 }
 
+func TestFindAll(t *testing.T) {
+	dir := t.TempDir()
+	files := []string{"440.png", "440.jpg", "570.webp", "4400.jpg", "readme.txt", "730.header.jpg"}
+	for _, name := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := FindAll(dir)
+	if filepath.Base(got[440]) != "440.jpg" {
+		t.Fatalf("440 = %q", got[440])
+	}
+	if filepath.Base(got[570]) != "570.webp" {
+		t.Fatalf("570 = %q", got[570])
+	}
+	if filepath.Base(got[4400]) != "4400.jpg" {
+		t.Fatalf("4400 = %q", got[4400])
+	}
+	if got[730] != "" {
+		t.Fatalf("730 should be skipped: %#v", got)
+	}
+}
+
 func TestRunCopiesLocalCache(t *testing.T) {
 	root := t.TempDir()
 	cache := filepath.Join(root, "appcache", "librarycache")

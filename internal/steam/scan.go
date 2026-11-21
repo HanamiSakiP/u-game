@@ -22,6 +22,9 @@ type Options struct {
 	SteamDir string
 	// IncludePartial 为 true 时保留 appmanifest 存在但文件目录缺失的条目。
 	IncludePartial bool
+	// IncludeHidden 为 true 时保留默认隐藏的 Steam 运行库 / 工具
+	// （见 DefaultHiddenAppIDs）。
+	IncludeHidden bool
 }
 
 type libraryEntry struct {
@@ -150,6 +153,10 @@ func Scan(opts Options) (*model.InstalledData, error) {
 			app, warn := readApp(libPath, appsDir, id, ids[id], entry.DownloadType)
 			if warn != "" {
 				result.Warnings = append(result.Warnings, warn)
+			}
+			if !opts.IncludeHidden && IsDefaultHiddenApp(id) {
+				result.Hidden = append(result.Hidden, fmt.Sprintf("%d: %s", id, app.Name))
+				continue
 			}
 			if !app.Installed && !opts.IncludePartial {
 				result.Skipped = append(result.Skipped, fmt.Sprintf("%d: 未完整安装（%s）", id, app.Name))

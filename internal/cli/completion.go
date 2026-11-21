@@ -336,7 +336,7 @@ _ugal_complete() {
             *) cmd="$w"; break ;;
         esac
     done
-    local commands="sync scan list missing extra libs system cover fav patch save update config cookie completion version help"
+    local commands="tui sync scan list missing extra libs play system cover fav patch save update config cookie completion version help"
     local globals="--data-dir -d --help -h --version -v"
 
     case "$prev" in
@@ -364,9 +364,10 @@ _ugal_complete() {
     local opts=""
     case "$cmd" in
         sync) opts="--source --cookie --cookie-file --user-agent --browser --browser-timeout --timeout" ;;
-        scan) opts="--include-partial" ;;
-        list|missing|extra) opts="--json --owned --installed --missing --extra --type --limit --paths" ;;
+        scan) opts="--include-partial --include-hidden" ;;
+        list|missing|extra) opts="--json --owned --installed --missing --extra --type --limit --paths --include-hidden" ;;
         libs|system) opts="--json" ;;
+        play) opts="--list --json --player" ;;
         cover) opts="--list --force --style --source --type --concurrency --timeout --retry --json --paths" ;;
         fav) opts="list add status remove export import import-patches clear --name --note --status --json --installed --missing --paths --offline --replace --clear --all" ;;
         patch) opts="list set remove check install hash md5 sha256 --json --all --name --hash --file --md5 --sha256 --applied --not-applied --offline --dir --game-dir --strip --backup --dry-run" ;;
@@ -386,12 +387,14 @@ const zshCompletion = `#compdef ugal
 _ugal() {
     local -a commands options
     commands=(
+        'tui:打开全屏交互界面'
         'sync:从 SteamDB 抓取已拥有游戏'
         'scan:扫描本地 Steam 库'
         'list:列出已拥有游戏及安装状态'
         'missing:只列出未安装的游戏'
         'extra:只列出本地独有的游戏'
         'libs:列出 Steam 库目录'
+        'play:用本地播放器播放音乐原声带'
         'system:检测并记录系统环境'
         'cover:获取或下载游戏封面'
         'fav:本地收藏夹'
@@ -421,7 +424,10 @@ _ugal() {
                 '--timeout:网络超时'
             ) ;;
         scan)
-            options=( '--include-partial:保留未完整安装的条目' ) ;;
+            options=(
+                '--include-partial:保留未完整安装的条目'
+                '--include-hidden:保留默认隐藏的 Steam 运行库 / 工具'
+            ) ;;
         list|missing|extra)
             options=(
                 '--json:输出 JSON'
@@ -432,9 +438,16 @@ _ugal() {
                 '--type:游戏或音乐 (game/music)'
                 '--limit:限制显示行数'
                 '--paths:显示完整安装路径'
+                '--include-hidden:显示默认隐藏的 Steam 运行库 / 工具'
             ) ;;
         libs|system)
             options=( '--json:输出 JSON' ) ;;
+        play)
+            options=(
+                '--list:只列出可播放的原声带'
+                '--player:指定播放器命令'
+                '--json:输出 JSON'
+            ) ;;
         cover)
             options=(
                 '--list:只查看封面状态'
@@ -585,12 +598,14 @@ fi
 const fishCompletion = `# fish completion for ugal
 complete -c ugal -f
 
+complete -c ugal -n '__fish_use_subcommand' -a tui -d '打开全屏交互界面'
 complete -c ugal -n '__fish_use_subcommand' -a sync -d '从 SteamDB 抓取已拥有游戏'
 complete -c ugal -n '__fish_use_subcommand' -a scan -d '扫描本地 Steam 库'
 complete -c ugal -n '__fish_use_subcommand' -a list -d '列出已拥有游戏及安装状态'
 complete -c ugal -n '__fish_use_subcommand' -a missing -d '只列出未安装的游戏'
 complete -c ugal -n '__fish_use_subcommand' -a extra -d '只列出本地独有的游戏'
 complete -c ugal -n '__fish_use_subcommand' -a libs -d '列出 Steam 库目录'
+complete -c ugal -n '__fish_use_subcommand' -a play -d '用本地播放器播放音乐原声带'
 complete -c ugal -n '__fish_use_subcommand' -a system -d '检测并记录系统环境'
 complete -c ugal -n '__fish_use_subcommand' -a cover -d '获取或下载游戏封面'
 complete -c ugal -n '__fish_use_subcommand' -a fav -d '本地收藏夹'
@@ -616,6 +631,7 @@ complete -c ugal -n '__fish_seen_subcommand_from sync' -l browser-timeout -r -d 
 complete -c ugal -n '__fish_seen_subcommand_from sync' -l timeout -r -d '网络超时'
 
 complete -c ugal -n '__fish_seen_subcommand_from scan' -l include-partial -d '保留未完整安装的条目'
+complete -c ugal -n '__fish_seen_subcommand_from scan' -l include-hidden -d '保留默认隐藏的 Steam 运行库 / 工具'
 
 complete -c ugal -n '__fish_seen_subcommand_from list missing extra' -l json -d '输出 JSON'
 complete -c ugal -n '__fish_seen_subcommand_from list missing extra' -l owned -d '只看已拥有'
@@ -625,8 +641,13 @@ complete -c ugal -n '__fish_seen_subcommand_from list missing extra' -l extra -d
 complete -c ugal -n '__fish_seen_subcommand_from list missing extra' -l type -xa 'game music' -d '类型'
 complete -c ugal -n '__fish_seen_subcommand_from list missing extra' -l limit -r -d '限制显示行数'
 complete -c ugal -n '__fish_seen_subcommand_from list missing extra' -l paths -d '显示完整安装路径'
+complete -c ugal -n '__fish_seen_subcommand_from list missing extra' -l include-hidden -d '显示默认隐藏的 Steam 运行库 / 工具'
 
 complete -c ugal -n '__fish_seen_subcommand_from libs system' -l json -d '输出 JSON'
+
+complete -c ugal -n '__fish_seen_subcommand_from play' -l list -d '只列出可播放的原声带'
+complete -c ugal -n '__fish_seen_subcommand_from play' -l player -r -d '指定播放器命令'
+complete -c ugal -n '__fish_seen_subcommand_from play' -l json -d '输出 JSON'
 
 complete -c ugal -n '__fish_seen_subcommand_from cover' -l list -d '只查看封面状态'
 complete -c ugal -n '__fish_seen_subcommand_from cover' -l force -d '重新获取已有封面'
@@ -716,15 +737,16 @@ Register-ArgumentCompleter -Native -CommandName ugal -ScriptBlock {
     param($wordToComplete, $commandAst, $cursorPosition)
     $elements = $commandAst.CommandElements
     $cmd = if ($elements.Count -gt 1) { $elements[1].Value } else { '' }
-    $commands = @('sync','scan','list','missing','extra','libs','system','cover','fav','patch','save','update','config','cookie','completion','version','help')
+    $commands = @('tui','sync','scan','list','missing','extra','libs','play','system','cover','fav','patch','save','update','config','cookie','completion','version','help')
     $globalOptions = @('--data-dir','-d','--help','-h','--version','-v')
     $options = switch ($cmd) {
         'sync' { @('--source','--cookie','--cookie-file','--user-agent','--browser','--browser-timeout','--timeout') }
-        'scan' { @('--include-partial') }
-        'list' { @('--json','--owned','--installed','--missing','--extra','--type','--limit','--paths') }
-        'missing' { @('--json','--type','--limit','--paths') }
-        'extra' { @('--json','--type','--limit','--paths') }
+        'scan' { @('--include-partial','--include-hidden') }
+        'list' { @('--json','--owned','--installed','--missing','--extra','--type','--limit','--paths','--include-hidden') }
+        'missing' { @('--json','--type','--limit','--paths','--include-hidden') }
+        'extra' { @('--json','--type','--limit','--paths','--include-hidden') }
         'libs' { @('--json') }
+        'play' { @('--list','--json','--player') }
         'system' { @('--json') }
         'cover' { @('--list','--force','--style','--source','--type','--concurrency','--timeout','--retry','--json','--paths') }
         'fav' { @('list','add','status','remove','export','import','import-patches','clear','--name','--note','--status','--json','--installed','--missing','--paths','--offline','--replace','--clear','--all') }

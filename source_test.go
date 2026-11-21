@@ -18,6 +18,7 @@ func TestEnsureSourceWritesTree(t *testing.T) {
 	}
 	for _, name := range []string{
 		"go.mod",
+		"go.sum",
 		"source.go",
 		"cmd/ugal/main.go",
 		"internal/cli/cli.go",

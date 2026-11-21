@@ -437,18 +437,8 @@ func (a *app) favList(args []string) error {
 	// 按备注分组排序：有备注的按备注名称排列，没有备注的用发行商作为分组，
 	// 两者都没有的统一归入「无分组」并排在最后；同一分组内按游戏名称排序。
 	sort.SliceStable(rows, func(i, j int) bool {
-		a, b := favoriteGroup(rows[i]), favoriteGroup(rows[j])
-		if (a == "") != (b == "") {
-			return b == ""
-		}
-		if !strings.EqualFold(a, b) {
-			return strings.ToLower(a) < strings.ToLower(b)
-		}
-		na, nb := strings.ToLower(rows[i].Name), strings.ToLower(rows[j].Name)
-		if na != nb {
-			return na < nb
-		}
-		return rows[i].AppID < rows[j].AppID
+		return favoriteSortLess(favoriteGroup(rows[i]), rows[i].Name, rows[i].AppID,
+			favoriteGroup(rows[j]), rows[j].Name, rows[j].AppID)
 	})
 
 	installedCount := 0
@@ -612,6 +602,23 @@ func favoriteGroup(r favoriteRow) string {
 		return note
 	}
 	return strings.TrimSpace(r.Publisher)
+}
+
+// favoriteSortLess 比较两条收藏的排序：有备注/发行商分组的排在前面，
+// 分组名不区分大小写排序，同一分组内按游戏名称排序，最后按 appid。
+// fav list 和 TUI 收藏视图共用这套顺序。
+func favoriteSortLess(groupA, nameA string, appIDa int, groupB, nameB string, appIDb int) bool {
+	if (groupA == "") != (groupB == "") {
+		return groupB == ""
+	}
+	if !strings.EqualFold(groupA, groupB) {
+		return strings.ToLower(groupA) < strings.ToLower(groupB)
+	}
+	na, nb := strings.ToLower(nameA), strings.ToLower(nameB)
+	if na != nb {
+		return na < nb
+	}
+	return appIDa < appIDb
 }
 
 // publisherGroupOverrides 把多发行商组合归并到指定的主发行商。

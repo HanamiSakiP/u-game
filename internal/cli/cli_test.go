@@ -70,6 +70,59 @@ func TestRunListJSON(t *testing.T) {
 	}
 }
 
+func TestRunListHidesRuntimeAppsByDefault(t *testing.T) {
+	dir := t.TempDir()
+	st, err := store.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SaveInstalled(&model.InstalledData{
+		SteamRoot: "/steam",
+		Games: []model.App{
+			{AppID: 100, Name: "Game A", Type: "game", Installed: true},
+			{AppID: 228980, Name: "Steamworks Common Redistributables", Type: "game", Installed: true},
+			{AppID: 1493710, Name: "Proton Experimental", Type: "game", Installed: true},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var out, errBuf bytes.Buffer
+	if err := Run([]string{"--data-dir", dir, "list", "--installed", "--json"}, &out, &errBuf); err != nil {
+		t.Fatalf("Run: %v (stderr %s)", err, errBuf.String())
+	}
+	var payload struct {
+		Summary summaryJSON `json:"summary"`
+		Total   int         `json:"total"`
+		Games   []entry     `json:"games"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &payload); err != nil {
+		t.Fatalf("json: %v\n%s", err, out.String())
+	}
+	if payload.Total != 1 || len(payload.Games) != 1 || payload.Games[0].AppID != 100 {
+		t.Fatalf("default rows = %#v", payload.Games)
+	}
+	if payload.Summary.Installed != 1 || payload.Summary.Extra != 1 {
+		t.Fatalf("summary = %#v", payload.Summary)
+	}
+
+	out.Reset()
+	if err := Run([]string{"--data-dir", dir, "list", "--installed", "--include-hidden", "--json"}, &out, &errBuf); err != nil {
+		t.Fatalf("Run include hidden: %v (stderr %s)", err, errBuf.String())
+	}
+	payload = struct {
+		Summary summaryJSON `json:"summary"`
+		Total   int         `json:"total"`
+		Games   []entry     `json:"games"`
+	}{}
+	if err := json.Unmarshal(out.Bytes(), &payload); err != nil {
+		t.Fatalf("json: %v\n%s", err, out.String())
+	}
+	if payload.Total != 3 || payload.Summary.Installed != 3 {
+		t.Fatalf("include hidden rows = %d, summary = %#v", payload.Total, payload.Summary)
+	}
+}
+
 func TestRunMissing(t *testing.T) {
 	dir := t.TempDir()
 	st, _ := store.Open(dir)

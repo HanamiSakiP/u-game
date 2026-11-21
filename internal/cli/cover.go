@@ -13,6 +13,7 @@ import (
 
 	"github.com/HanamiSakiP/u-game/internal/cover"
 	"github.com/HanamiSakiP/u-game/internal/model"
+	"github.com/HanamiSakiP/u-game/internal/steam"
 )
 
 func (a *app) cmdCover(args []string) error {
@@ -295,7 +296,7 @@ func buildCoverTargets(installed *model.InstalledData, owned *model.OwnedData, i
 		return nil
 	}
 	for _, ap := range installed.Games {
-		if !ap.Installed {
+		if !ap.Installed || steam.IsDefaultHiddenApp(ap.AppID) {
 			continue
 		}
 		appType := ap.Type

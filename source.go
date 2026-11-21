@@ -15,7 +15,7 @@ import (
 	"github.com/HanamiSakiP/u-game/internal/store"
 )
 
-//go:embed all:cmd all:internal go.mod README.md source.go source_test.go
+//go:embed all:cmd all:internal go.mod go.sum README.md source.go source_test.go
 var embedded embed.FS
 
 // DefaultSourceDir 返回默认源码目录：数据目录下的 src（默认 ~/.ugal/src）。

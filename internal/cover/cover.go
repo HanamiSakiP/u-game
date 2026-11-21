@@ -330,6 +330,42 @@ func copyCover(destDir string, appid int, src string) (string, error) {
 	return writeCover(destDir, appid, ext, data)
 }
 
+// FindAll 一次读取封面目录，返回 appid 到封面文件的映射。
+// 同一个 appid 有多个格式时优先 jpg/jpeg，其次 png、webp。
+func FindAll(dir string) map[int]string {
+	out := make(map[int]string)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return out
+	}
+	ranks := make(map[int]int)
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		dot := strings.IndexByte(name, '.')
+		if dot <= 0 {
+			continue
+		}
+		id, err := strconv.Atoi(name[:dot])
+		if err != nil || id <= 0 {
+			continue
+		}
+		ext := strings.ToLower(name[dot:])
+		if !imageExts[ext] {
+			continue
+		}
+		rank := extRank(ext)
+		if old, ok := ranks[id]; ok && old <= rank {
+			continue
+		}
+		out[id] = filepath.Join(dir, e.Name())
+		ranks[id] = rank
+	}
+	return out
+}
+
 // Find 返回封面目录中某个 appid 的封面文件，没有时返回空串。
 func Find(dir string, appid int) string {
 	if appid <= 0 {

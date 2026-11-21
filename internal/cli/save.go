@@ -567,10 +567,14 @@ func (a *app) saveClear(args []string) error {
 	return a.saveRemove(args)
 }
 
+func (a *app) resolveCloudRoot(candidates ...string) string {
+	return resolveCloudRoot(candidates...)
+}
+
 // resolveCloudRoot 优先使用含有 userdata 的 Steam 根目录。scan 时如果传入的是
 // 库目录（例如 D:\SteamLibrary），installed.SteamRoot 也会是库目录；此时再尝试
 // 配置目录和常见 Steam 安装位置，避免云存档同步失败。
-func (a *app) resolveCloudRoot(candidates ...string) string {
+func resolveCloudRoot(candidates ...string) string {
 	seen := make(map[string]bool)
 	var first string
 	try := func(path string) string {

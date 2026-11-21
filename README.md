@@ -7,6 +7,7 @@
 1. 通过 `https://steamdb.info/calculator/<steamid>` 获取账号全部已拥有游戏；
 2. 通过本地 Steam 的 `steamapps/libraryfolders.vdf` 和 `appmanifest_*.acf`
    获取所有库目录、已安装游戏、音乐原声带、安装目录名与占用空间；
+   Steam 运行库和工具（Proton、Steam Linux Runtime 等）默认隐藏；
 3. 对比两者，列出「已拥有未安装」「本地已安装但未同步」的游戏；
 4. 检测并记录当前系统环境（发行版、内核、桌面、会话等）；
 5. 为本地已安装游戏获取封面，优先复制 Steam 本地缓存，缺失时从 Steam CDN 下载；
@@ -17,6 +18,8 @@
 10. 自我更新：源码内嵌在二进制中，任意命令自动写入数据目录下的 `src/`（默认 `~/.ugal/src`）；`ugal update` 同步远程更新并在本机重新构建。
 11. Cookie 管理：`ugal cookie get` 用 Firefox 获取 SteamDB Cookie，支持查看、定位和清除。
 12. 命令补全：`ugal completion` 自动检测当前 shell 并写入标准补全位置，也可显式指定 bash/zsh/fish/powershell。
+13. 交互式 TUI：`ugal tui`（或直接运行 `ugal`）在终端中浏览全部游戏、已安装/未安装列表、收藏夹、补丁列表和存档列表，音乐原声带单独成页，支持搜索、修改收藏状态、校验/安装补丁，以及备份、还原和删除存档；在音乐页可以查看音轨列表、选择音轨、暂停/继续和切歌。
+14. 音乐播放：`ugal play <APPID|名称>` 用本机播放器播放音乐原声带，自动选择 mpv、VLC 等常见播放器，找不到时交给系统默认播放器；TUI 中支持音轨选择和暂停。
 
 数据默认保存在 `~/.ugal`；如果当前目录下的 `.ugal` 是数据目录（空目录，或含有
 `config.json`、`owned.json` 等数据文件），则优先使用它（方便把数据放在项目里）。
@@ -82,6 +85,12 @@ ugal list --missing       # 已拥有但未安装
 ugal list --installed     # 本地已安装
 ugal extra                # 本地已安装但 SteamDB 未记录（家庭共享、免费游戏等）
 ugal libs                 # 库目录、游戏/音乐数量、占用空间
+
+# 音乐原声带：用本地播放器直接播放
+ugal play                 # 列出可播放的原声带
+ugal play 123456          # 按 APPID 播放
+ugal play "OST 名称"      # 按名称模糊匹配（多个匹配时会提示改用 APPID）
+ugal play 123456 --player mpv   # 指定播放器命令
 
 # 4. 检测并记录系统环境
 ugal system               # 写入 system.json
@@ -163,7 +172,9 @@ list --json                 输出 JSON
 list --type game|music      按类型过滤
 list --paths                显示完整安装路径
 list --limit 50             限制显示行数
+list --include-hidden       显示默认隐藏的 Steam 运行库 / 工具
 scan --include-partial      保留未完整安装的条目
+scan --include-hidden       保留默认隐藏的 Steam 运行库 / 工具
 sync --source steamdb       强制来源（auto/steamdb/community/api）
 sync --source community     使用 Steam 社区，标识按原样使用（不转换 SteamID64）
 sync --cookie-file FILE     使用浏览器导出的 SteamDB Cookie
@@ -238,6 +249,97 @@ update --branch NAME        同步分支
 update --install PATH       安装到指定路径
 update --force              git 丢弃本地改动 / 强制重新下载
 ```
+
+## 交互式界面（TUI）
+
+在交互式终端里直接运行 `ugal` 或 `ugal tui` 会打开全屏界面；输出被重定向
+或运行在非交互环境时，`ugal` 仍然显示帮助文本。
+
+```bash
+ugal            # 交互式终端下自动进入 TUI
+ugal tui        # 显式打开 TUI
+```
+
+界面左侧是游戏列表，右侧显示选中游戏的详情（安装状态、路径、大小、收藏状态、
+补丁记录、补丁文件校验结果和存档位置）。顶部可以在「全部 / 已安装 / 未安装 /
+收藏 / 补丁 / 存档 / 音乐」之间切换；「补丁」视图只显示有补丁记录的游戏，「存档」视图
+只显示已经备份过存档的游戏。「收藏」视图和 `ugal fav list` 一样按备注/发行商排序：
+有备注的按备注分组，没有备注的按发行商分组，两者都没有的排在最后；列表中以红色
+显示「分组名（N 个）」标题，首次进入收藏视图时会在后台获取缺少的发行商并缓存到
+`publishers.json`。「已安装」视图会在列表右侧显示每款游戏的占用空间，底部状态栏
+汇总当前列表的占用总量。音乐原声带单独放在「音乐」页面，不会混进游戏列表。
+Steam 运行库和工具默认隐藏，按 `h` 可以临时显示；再次按 `h` 恢复隐藏。
+存档视图的列表图标：`C` 云存档、`L` 本地存档、`B` 两者都有。
+
+| 按键 | 功能 |
+| --- | --- |
+| `↑` `↓` / `j` `k` | 移动光标 |
+| 鼠标 | 点击顶部标签切换视图，点击列表选中游戏，滚轮滚动列表；音乐页右侧可点击或按住滑行选音轨 |
+| `PgUp` / `PgDn` | 翻页 |
+| `g` / `G` | 跳到顶部 / 底部 |
+| `Tab` / `Shift+Tab` | 切换视图 |
+| `1` - `7` | 直接切换到全部 / 已安装 / 未安装 / 收藏 / 补丁 / 存档 / 音乐 |
+| `/` | 搜索名称、APPID、安装路径、库目录、收藏备注、发行商、补丁或存档路径 |
+| `Enter` / `Esc` | 确认搜索 / 清除搜索 |
+| `Enter` / `o` | 在音乐视图播放选中的原声带或音轨 |
+| `Space` | 暂停 / 继续当前播放的音乐 |
+| `J` / `K` | 在音乐视图向上 / 向下选择音轨 |
+| `n` / `N` | 播放下一首 / 上一首音轨；没有在播放时只移动音轨选择 |
+| `h` | 显示 / 隐藏 Steam 运行库和工具 |
+| `f` | 收藏或取消收藏 |
+| `s` | 循环收藏状态（想玩 → 在玩 → 已通关 → 搁置 → 清除） |
+| `p` | 切换该游戏补丁的已打 / 未打状态 |
+| `c` | 校验当前游戏的补丁文件是否存在、哈希是否正确 |
+| `C` | 校验 `patches.json` 中的全部补丁 |
+| `i` | 安装当前游戏的补丁（需要确认，替换前自动备份到 `patch-backups`） |
+| `b` | 备份当前游戏的云存档和本地存档 |
+| `B` | 备份全部已安装游戏的存档 |
+| `R` | 还原当前游戏的存档（需要确认，会覆盖较旧的存档文件） |
+| `x` | 删除当前游戏的存档记录和备份（需要确认） |
+| `r` | 重新读取数据目录 |
+| `?` | 打开 / 关闭快捷键帮助 |
+| `q` / `Ctrl+C` | 退出 |
+
+TUI 中的收藏、补丁和存档修改会直接写回 `favorites.json`、`patches.json` 和
+`saves.json`，和 `ugal fav`、`ugal patch`、`ugal save` 命令共用同一份数据。
+`b` / `B` 备份的存档保存在数据目录的 `saves/<appid>/` 下，与 `ugal save sync`
+完全一致。
+
+## 音乐播放
+
+音乐原声带位于 `<库>/steamapps/music/<installdir>`。`ugal play` 和 TUI 音乐页都会
+扫描该目录下的音频文件（mp3、flac、wav、ogg、opus、m4a 等），并把它们交给本机
+正在运行的播放器播放，ugal 本身不会占用终端或接管音频输出。
+
+播放器选择顺序：
+
+1. `--player` 指定的命令，例如 `ugal play 123456 --player mpv`；
+2. 环境变量 `UGAL_PLAYER`，例如 `export UGAL_PLAYER="mpv --no-video"`；
+3. 自动查找 mpv、VLC、Celluloid、Audacious、Strawberry、Clementine、Elisa、
+   Rhythmbox、Parole、Quod Libet、DeaDBeeF；
+4. 以上都没有时，用 `xdg-open`（macOS 为 `open`，Windows 用 `cmd /c start`）
+   把第一首交给系统默认播放器。
+
+```bash
+ugal play --list                 # 查看可播放的原声带
+ugal play 123456                 # 按 APPID 播放
+ugal play "游戏名"               # 按名称匹配
+ugal play 123456 --json          # 输出实际使用的播放器和文件列表
+UGAL_PLAYER=vlc ugal play 123456 # 临时指定播放器
+```
+
+在 TUI 的「音乐」页面选中一款原声带后，右侧会列出全部音轨：
+
+- `J` / `K` 上下选择音轨，`Enter` 播放选中的音轨；
+- `Space` 暂停 / 继续，`n` / `N` 切换下一首 / 上一首；没有在播放时
+  `n` / `N` 只移动音轨选择，不需要先按 `Enter` 开始播放；
+- 播放状态（播放中 / 已暂停 / 当前第几首）会显示在详情和底部状态栏，
+  同时显示正在播放的 APPID，音乐列表中的播放行会标记为 `▶`（暂停时为 `▮`）；
+- 使用 mpv 时会加载完整播放列表，一首结束后自动播放下一首；
+- 退出 TUI 时会结束由 ugal 启动的播放器。
+
+普通播放器通过系统信号暂停和继续；如果选中的是系统默认打开方式，则只能播放，
+无法在 TUI 中暂停。
 
 ## SteamDB 与 Cloudflare
 
@@ -359,7 +461,8 @@ ugal config branch main                      # 自我更新的分支
 收藏夹保存在 `favorites.json`，可按 appid 添加、删除、筛选，并支持导入导出。
 `fav list` 优先按备注分组排序；没有备注的收藏会联网获取发行商并按发行商分组，
 两者都没有时归入「无分组」。表格中显示备注/发行商而不是添加时间。有备注的收藏
-仍然按备注分组，备注不会被发行商覆盖。多发行商组合按以下规则归并：
+仍然按备注分组，备注不会被发行商覆盖。TUI 的「收藏」视图也使用同样的备注/发行商
+排序，并在首次进入时后台补齐并缓存发行商。多发行商组合按以下规则归并：
 
 | 原始组合 | 分组 |
 | --- | --- |
@@ -690,6 +793,23 @@ ugal save clear                 # 清空所有存档记录和备份
 - `StateFlags` 的第 2 位（值为 4）表示已完整安装；
 - 只有 `libraryfolders.vdf` 的 `apps` 表但缺少 `appmanifest_*.acf` 的条目
   也会保留，并标记 `manifest_missing: true`。
+
+### 默认隐藏的运行库
+
+以下 Steam 运行库 / 工具不是游戏，扫描时默认跳过，也不会出现在 `list` 和 TUI 中：
+
+| appid | 名称 |
+| --- | --- |
+| `228980` | Steamworks Common Redistributables |
+| `4183110` | Steam Linux Runtime 4.0 |
+| `1628350` | Steam Linux Runtime 3.0 (sniper) |
+| `1391110` | Steam Linux Runtime 2.0 (soldier) |
+| `1070560` | Steam Linux Runtime 1.0 (scout) |
+| `1493710` | Proton Experimental |
+
+`ugal scan --include-hidden` 会把它们写回 `installed.json`，
+`ugal list --include-hidden` 可以临时显示；TUI 中按 `h` 切换显示。
+被隐藏的条目不计入已安装数量、占用空间和封面获取范围。
 
 ## 自我更新
 

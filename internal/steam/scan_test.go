@@ -1,8 +1,10 @@
 package steam
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -135,6 +137,52 @@ func TestScanWithoutLibraryFolders(t *testing.T) {
 	if res.Count != 1 {
 		t.Fatalf("count = %d, want 1", res.Count)
 	}
+}
+
+func TestScanHidesDefaultRuntimeApps(t *testing.T) {
+	root := t.TempDir()
+	mustMkdir(t, filepath.Join(root, "steamapps", "common", "Game A"))
+	mustMkdir(t, filepath.Join(root, "steamapps", "common", "Proton Experimental"))
+	for _, app := range []struct {
+		id        int
+		name, dir string
+	}{
+		{100, "Game A", "Game A"},
+		{1493710, "Proton Experimental", "Proton Experimental"},
+	} {
+		writeFile(t, filepath.Join(root, "steamapps", fmt.Sprintf("appmanifest_%d.acf", app.id)),
+			fmt.Sprintf(`"AppState" { "name" "%s" "installdir" "%s" "StateFlags" "4" }`, app.name, app.dir))
+	}
+
+	res, err := Scan(Options{SteamDir: root})
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	if res.Count != 1 || res.GameCount != 1 {
+		t.Fatalf("counts = %d/%d, want 1/1", res.Count, res.GameCount)
+	}
+	if len(res.Hidden) != 1 || !strings.Contains(res.Hidden[0], "Proton Experimental") {
+		t.Fatalf("hidden = %v", res.Hidden)
+	}
+	for _, app := range res.Games {
+		if app.AppID == 1493710 {
+			t.Fatal("hidden app should not be included")
+		}
+	}
+
+	res2, err := Scan(Options{SteamDir: root, IncludeHidden: true})
+	if err != nil {
+		t.Fatalf("Scan include hidden: %v", err)
+	}
+	if res2.Count != 2 || len(res2.Hidden) != 0 {
+		t.Fatalf("include hidden counts = %d, hidden = %v", res2.Count, res2.Hidden)
+	}
+	for _, app := range res2.Games {
+		if app.AppID == 1493710 {
+			return
+		}
+	}
+	t.Fatal("hidden app not included with IncludeHidden")
 }
 
 func mustMkdir(t *testing.T, p string) {

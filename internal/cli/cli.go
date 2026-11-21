@@ -52,6 +52,10 @@ func Run(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	if len(rest) == 0 {
+		// 交互式终端下直接进入 TUI；管道、重定向和测试环境仍然输出帮助。
+		if isTerminal(stdout) && isTerminal(os.Stdin) {
+			return runTUI(dataDir, stdout, stderr)
+		}
 		printHelp(stdout)
 		return nil
 	}
@@ -86,6 +90,8 @@ func Run(args []string, stdout, stderr io.Writer) error {
 	}
 
 	switch rest[0] {
+	case "tui", "ui":
+		return runTUI(dataDir, stdout, stderr)
 	case "sync":
 		return a.cmdSync(rest[1:])
 	case "scan":
@@ -98,6 +104,8 @@ func Run(args []string, stdout, stderr io.Writer) error {
 		return a.cmdList(rest[1:], "extra")
 	case "libs":
 		return a.cmdLibs(rest[1:])
+	case "play", "music", "soundtrack":
+		return a.cmdPlay(rest[1:])
 	case "system", "sysinfo":
 		return a.cmdSystem(rest[1:])
 	case "cover", "covers":
@@ -408,6 +416,7 @@ func (a *app) cmdScan(args []string) error {
 	fs := flag.NewFlagSet("scan", flag.ContinueOnError)
 	fs.SetOutput(a.err)
 	includePartial := fs.Bool("include-partial", false, "保留 appmanifest 存在但目录缺失的条目")
+	includeHidden := fs.Bool("include-hidden", false, "保留默认隐藏的 Steam 运行库 / 工具")
 	fs.Usage = func() {
 		fmt.Fprintln(a.err, "用法: ugal scan [Steam目录] [参数]")
 		fs.PrintDefaults()
@@ -427,7 +436,11 @@ func (a *app) cmdScan(args []string) error {
 		steamDir = rest[0]
 	}
 
-	result, err := steam.Scan(steam.Options{SteamDir: steamDir, IncludePartial: *includePartial})
+	result, err := steam.Scan(steam.Options{
+		SteamDir:       steamDir,
+		IncludePartial: *includePartial,
+		IncludeHidden:  *includeHidden,
+	})
 	if err != nil {
 		return err
 	}
@@ -476,6 +489,9 @@ func (a *app) cmdScan(args []string) error {
 	if len(result.Skipped) > 0 {
 		fmt.Fprintf(a.out, "跳过        : %d 个未完整安装条目（--include-partial 可保留）\n", len(result.Skipped))
 	}
+	if len(result.Hidden) > 0 {
+		fmt.Fprintf(a.out, "隐藏        : %d 个 Steam 运行库 / 工具（--include-hidden 可保留）\n", len(result.Hidden))
+	}
 
 	if owned, err := a.store.LoadOwned(); err == nil {
 		installedSet := make(map[int]bool, len(result.Games))
@@ -507,6 +523,7 @@ func (a *app) cmdList(args []string, forced string) error {
 	typeFlag := fs.String("type", "", "只看 game 或 music")
 	limit := fs.Int("limit", 0, "最多显示多少行（0 为不限制）")
 	paths := fs.Bool("paths", false, "显示完整安装路径")
+	includeHidden := fs.Bool("include-hidden", false, "显示默认隐藏的 Steam 运行库 / 工具")
 	fs.Usage = func() {
 		fmt.Fprintln(a.err, "用法: ugal list [--owned|--installed|--missing|--extra] [参数]")
 		fs.PrintDefaults()
@@ -586,6 +603,9 @@ func (a *app) cmdList(args []string, forced string) error {
 
 	var rows []entry
 	for _, e := range all {
+		if !*includeHidden && steam.IsDefaultHiddenApp(e.AppID) {
+			continue
+		}
 		if typeFilter != "" && e.Type != typeFilter {
 			continue
 		}
@@ -610,7 +630,7 @@ func (a *app) cmdList(args []string, forced string) error {
 		rows = append(rows, e)
 	}
 
-	summary := summarize(owned, installed)
+	summary := summarize(owned, installed, *includeHidden)
 	totalRows := len(rows)
 	if *asJSON {
 		jsonRows := rows
@@ -997,19 +1017,27 @@ type summaryJSON struct {
 	Extra     int `json:"extra"`
 }
 
-func summarize(owned *model.OwnedData, installed *model.InstalledData) summaryJSON {
+func summarize(owned *model.OwnedData, installed *model.InstalledData, includeHidden bool) summaryJSON {
 	var s summaryJSON
 	installedSet := make(map[int]bool)
 	if installed != nil {
 		for _, ap := range installed.Games {
-			if ap.Installed {
-				installedSet[ap.AppID] = true
-				s.Installed++
+			if !ap.Installed {
+				continue
 			}
+			if !includeHidden && steam.IsDefaultHiddenApp(ap.AppID) {
+				continue
+			}
+			installedSet[ap.AppID] = true
+			s.Installed++
 		}
 	}
 	if owned != nil {
 		for _, g := range owned.Games {
+			if !includeHidden && steam.IsDefaultHiddenApp(g.AppID) {
+				delete(installedSet, g.AppID)
+				continue
+			}
 			s.Owned++
 			if !installedSet[g.AppID] {
 				s.Missing++
@@ -1110,12 +1138,14 @@ func printHelp(w io.Writer) {
   ugal [--data-dir 目录] <命令> [参数]
 
 命令:
+  tui                打开全屏交互界面（直接运行 ugal 也会进入）
   sync [steamid]     从 SteamDB 抓取已拥有游戏（--browser 可用浏览器通过 Cloudflare 验证）
   scan [Steam目录]   扫描本地 Steam 库，记录已安装游戏和存储目录
   list               列出已拥有游戏及本地安装状态（默认）
   missing            只列出已拥有但未安装的游戏
   extra              只列出本地已安装但 SteamDB 未记录的游戏
   libs               列出 Steam 库目录、数量与占用
+  play <appid|名称>  用本地播放器播放音乐原声带（--list 查看可播放条目）
   system             检测并记录当前系统环境
   cover [appid...]   获取/下载已安装游戏封面（跳过已有，失败自动重试）
   fav <子命令>       本地游戏收藏夹（添加、导入导出）
@@ -1136,7 +1166,9 @@ func printHelp(w io.Writer) {
   list --json                机器可读输出
   list --type game|music     按类型过滤
   list --paths               显示完整安装路径
+  list --include-hidden      显示默认隐藏的 Steam 运行库 / 工具
   scan --include-partial     保留未完整安装的条目
+  scan --include-hidden      保留默认隐藏的 Steam 运行库 / 工具
   sync --source steamdb      强制指定来源
   sync --source community    使用 Steam 社区（标识按原样使用，不转换 SteamID64）
   sync --cookie-file FILE    使用浏览器导出的 SteamDB Cookie
@@ -1146,6 +1178,9 @@ func printHelp(w io.Writer) {
   cover --force              重新获取已有封面
   cover --retry 2            下载失败后的重试次数
   cover --source local|cdn   只用本地缓存或只用网络
+  play <appid|名称>          播放原声带，播放器自动选择（mpv / VLC / 系统默认）
+  play --list                列出可播放的音乐原声带
+  play 440 --player mpv      指定播放器命令（也可设置 UGAL_PLAYER）
   fav add 440                收藏游戏
   fav add 440 --status 在玩  收藏并标记状态
   fav status 440 已通关      修改收藏状态（clear 清除）
@@ -1179,6 +1214,8 @@ func printHelp(w io.Writer) {
   completion --dir DIR       写入指定目录
 
 示例:
+  ugal                       # 交互式终端下打开 TUI
+  ugal tui
   ugal sync 76561198000000000
   ugal sync 22202            # AccountID 自动转换为 SteamID64
   ugal scan
